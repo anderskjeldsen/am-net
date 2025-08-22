@@ -1,0 +1,14 @@
+
+namespace Am.Net
+{
+    enum SocketType {
+        import Am.Lang
+
+        stream = 1
+        dgram = 2
+        raw = 3
+        rdm = 4
+        seqPacket = 5
+    }
+}
+

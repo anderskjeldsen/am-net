@@ -1,0 +1,10 @@
+
+namespace Am.Net
+{
+    enum ProtocolFamily {        
+        import Am.Lang
+        unspecified = 0
+    }
+
+}
+

@@ -1,0 +1,15 @@
+
+namespace Am.Net
+{
+    enum AddressFamily {
+        import Am.Lang
+
+        unspecified = 0
+        unix = 1
+        local = 1
+        inet = 2
+        inet6 = 10     
+    }   
+
+}
+

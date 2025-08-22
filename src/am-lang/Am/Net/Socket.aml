@@ -1,0 +1,38 @@
+
+namespace Am.Net
+{
+    native class Socket
+    {
+        import Am.Lang
+
+        private var addressFamily: AddressFamily
+        private var socketType: SocketType
+        private var protocolFamily: ProtocolFamily
+
+        static fun create(addressFamily: AddressFamily, socketType: SocketType, protocolFamily: ProtocolFamily): Socket {
+            var socket = new Socket()
+            socket.addressFamily = addressFamily
+            socket.socketType = socketType
+            socket.protocolFamily = protocolFamily
+
+            socket.createSocket(addressFamily, socketType, protocolFamily)
+
+            return socket
+        }
+
+        private native fun createSocket(addressFamily: AddressFamily, socketType: SocketType, protocolFamily: ProtocolFamily)
+
+        fun connect(hostName: String, port: Int) {
+            this.connectNative(hostName, port, this.addressFamily)
+        }
+
+        private native fun connectNative(hostName: String, port: Int, addressFamily: AddressFamily)
+
+        native fun send(bytes: UByte[], length: UInt): UInt
+        native fun receive(bytes: UByte[], length: UInt): UInt
+
+        native fun close()
+    }
+
+}
+
