@@ -1,0 +1,23 @@
+namespace Am.Net
+{
+    native class UdpSocket
+    {
+        import Am.Lang
+
+        private var addressFamily: AddressFamily
+
+        static fun create(addressFamily: AddressFamily): UdpSocket {
+            var socket = new UdpSocket()
+            socket.addressFamily = addressFamily
+            socket.createSocket(addressFamily)
+            return socket
+        }
+
+        private native fun createSocket(addressFamily: AddressFamily)
+
+        native fun bind(port: Int)
+        native fun sendTo(bytes: UByte[], length: UInt, hostName: String, port: Int): UInt
+        native fun receiveFrom(bytes: UByte[], length: UInt): UInt
+        native fun close()
+    }
+}

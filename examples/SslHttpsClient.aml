@@ -1,0 +1,51 @@
+namespace Examples
+{
+    import Am.Net
+    import Am.Lang
+
+    class SslHttpsClient
+    {
+        static fun main() {
+            try {
+                // Create TCP socket
+                var socket = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
+                
+                // Set timeout for connection
+                socket.setTimeout(10000)  // 10 seconds for SSL handshake
+                
+                // Connect to HTTPS server
+                socket.connect("httpbin.org", 443)
+                
+                // Create SSL socket with hostname verification
+                var sslSocket = SslSocket.create(socket, "httpbin.org")
+                
+                // Prepare HTTPS request
+                var request = "GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"
+                var requestBytes = request.getBytes()
+                
+                // Send encrypted request
+                var sent = sslSocket.send(requestBytes, requestBytes.length)
+                println("Sent " + sent + " bytes over SSL")
+                
+                // Read encrypted response
+                var buffer: UByte[4096]
+                var totalReceived = 0
+                
+                // Note: For SSL, we need to handle the encrypted stream differently
+                var received = sslSocket.receive(buffer, buffer.length)
+                if (received > 0) {
+                    totalReceived += received
+                    println("Received " + received + " bytes over SSL")
+                }
+                
+                println("Total received: " + totalReceived + " bytes")
+                
+                // Close SSL connection
+                sslSocket.close()
+                
+            } catch (ex: Exception) {
+                println("SSL Error: " + ex.getMessage())
+            }
+        }
+    }
+}
