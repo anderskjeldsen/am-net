@@ -1,16 +1,15 @@
 # Am-Net
 
-A cross-platform networking library for the Am programming language, providing socket programming capabilities with SSL/TLS support.
+A cross-platform networking library for the Am programming language, providing socket programming capabilities.
 
 ## Overview
 
-Am-Net is a networking library that provides high-level socket programming interfaces for the Am programming language. It offers both basic TCP/UDP socket functionality and secure SSL/TLS communications, with native implementations optimized for multiple platforms including AmigaOS, MorphOS, and macOS.
+Am-Net is a networking library that provides high-level socket programming interfaces for the Am programming language. It offers TCP/UDP socket functionality with native implementations optimized for multiple platforms including AmigaOS, MorphOS, and macOS.
 
 ## Features
 
 - **Cross-platform socket support** - Works on AmigaOS, MorphOS, and macOS
 - **TCP and UDP socket communication** - Full support for stream and datagram sockets
-- **SSL/TLS encryption** - Secure socket streams with OpenSSL integration
 - **Native performance** - C implementations for optimal performance
 - **Stream interface** - Unified stream API for easy integration with Am IO libraries
 - **Multiple address families** - Support for IPv4, IPv6, and Unix domain sockets
@@ -21,7 +20,6 @@ Am-Net is a networking library that provides high-level socket programming inter
 
 - Am language core library (am-lang-core)
 - C compiler (gcc)
-- OpenSSL development libraries (for SSL support)
 
 ### Platform-specific requirements
 
@@ -36,7 +34,6 @@ Am-Net is a networking library that provides high-level socket programming inter
 
 #### macOS
 - Xcode command line tools
-- OpenSSL via Homebrew: `brew install openssl`
 
 ### Building
 
@@ -98,30 +95,6 @@ var responseBuffer = new UByte[4096]
 var bytesRead = stream.read(responseBuffer, 0, 4096UI)
 ```
 
-### SSL/TLS Socket Example
-
-```am
-import Am.Net
-import Am.IO  
-import Am.Lang
-
-// Create a regular socket first
-var socket = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
-socket.connect("secure-server.com", 443)
-
-// Wrap in SSL stream for encrypted communication
-var sslStream = new SslSocketStream(socket, "secure-server.com")
-
-// Use encrypted stream for secure communication
-var httpsRequest = "GET / HTTP/1.1\r\nHost: secure-server.com\r\n\r\n"
-var requestBytes = httpsRequest.getBytes()
-sslStream.write(requestBytes, 0, requestBytes.length.toUInt())
-
-// Read encrypted response
-var responseBuffer = new UByte[4096]
-var bytesRead = sslStream.read(responseBuffer, 0, 4096UI)
-```
-
 ## API Reference
 
 ### Core Classes
@@ -147,17 +120,6 @@ A stream wrapper around Socket implementing the Stream interface.
 - `seekFromStart(offset: Long)` - Not supported, throws exception
 - `readByte(): Int` - Not supported, throws exception  
 - `writeByte(byte: Int)` - Not supported, throws exception
-
-#### SslSocketStream
-
-Secure socket stream providing SSL/TLS encryption.
-
-**Constructor:**
-- `SslSocketStream(socket: Socket, hostName: String)` - Creates SSL stream from socket
-
-**Methods:**
-- Inherits all Stream interface methods
-- Automatically handles SSL handshake and encryption/decryption
 
 ### Enumerations
 
@@ -200,7 +162,6 @@ Protocol specifications:
 
 ### macOS
 - Native macOS implementation using BSD sockets
-- OpenSSL integration for SSL support
 - Built with standard gcc/clang toolchain
 - Compatible with macOS 10.12+
 
@@ -210,7 +171,6 @@ All networking operations can throw exceptions. Common exception scenarios:
 
 - **Socket creation failure** - Invalid parameters or system limits
 - **Connection failure** - Host unreachable, connection refused, timeout
-- **SSL handshake failure** - Certificate validation, protocol mismatch
 - **Send/receive errors** - Network interruption, buffer issues
 
 Always wrap networking code in try-catch blocks:
@@ -230,7 +190,6 @@ try {
 
 - **Buffer sizes** - Use appropriate buffer sizes for your use case (typically 4KB-64KB)
 - **Connection reuse** - Reuse connections when possible to avoid handshake overhead
-- **SSL overhead** - SSL/TLS adds computational and bandwidth overhead
 - **Platform differences** - Performance characteristics vary between platforms
 
 ## Troubleshooting
@@ -242,11 +201,6 @@ try {
 - Verify system socket limits haven't been exceeded
 - Ensure proper privileges for raw sockets
 
-**SSL Connection Failures**
-- Verify OpenSSL is properly installed and linked
-- Check certificate validation and hostname matching
-- Ensure SSL/TLS version compatibility
-
 **Build Issues**
 - Verify all dependencies are installed for your target platform
 - Check Docker container availability for cross-platform builds
@@ -256,8 +210,7 @@ try {
 
 1. Enable verbose output in socket operations
 2. Use network monitoring tools to inspect traffic
-3. Test with simple HTTP requests before HTTPS
-4. Verify DNS resolution for hostname-based connections
+3. Verify DNS resolution for hostname-based connections
 
 ## Contributing
 
@@ -278,7 +231,6 @@ Contributions are welcome! Please follow these guidelines:
 ## Dependencies
 
 - **am-lang-core** - Core Am language runtime and standard library
-- **OpenSSL** - For SSL/TLS support (libssl, libcrypto)
 - **Platform-specific socket libraries** - socket.library (AmigaOS), BSD sockets (macOS/MorphOS)
 
 ## License
@@ -292,9 +244,8 @@ This project follows the same license as the Am language core library. See the a
 
 ## Version History
 
-- **0.6.1** - Current version with SSL support and multi-platform compatibility
+- **0.6.1** - Current version with multi-platform compatibility
 - Cross-platform socket implementation
-- SSL/TLS stream support  
 - Stream interface integration
 
 ---
