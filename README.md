@@ -14,12 +14,6 @@ Am-Net is a comprehensive networking library for the Am programming language, pr
 - **UDP Socket Support**: Create, bind, send to, and receive from UDP sockets
 - **Datagram Operations**: Full support for UDP datagram communication
 
-### SSL/TLS Support
-- **Secure Connections**: SSL/TLS support using OpenSSL
-- **Hostname Verification**: Automatic hostname verification for secure connections
-- **Certificate Validation**: Peer certificate verification with configurable options
-- **Modern TLS**: Support for modern TLS protocols
-
 ### Cross-Platform Support
 - **AmigaOS**: Native socket support with bsdsocket.library
 - **MorphOS**: PowerPC-based MorphOS support
@@ -48,29 +42,6 @@ var received = socket.receive(buffer, buffer.length)
 
 // Close connection
 socket.close()
-```
-
-### SSL Socket Client
-```am
-import Am.Net
-
-// Create TCP socket first
-var socket = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
-socket.connect("secure.example.com", 443)
-
-// Create SSL socket
-var sslSocket = SslSocket.create(socket, "secure.example.com")
-
-// Send encrypted data
-var data: UByte[] = "GET / HTTP/1.1\r\nHost: secure.example.com\r\n\r\n".getBytes()
-sslSocket.send(data, data.length)
-
-// Receive encrypted response
-var buffer: UByte[1024]
-var received = sslSocket.receive(buffer, buffer.length)
-
-// Close SSL connection
-sslSocket.close()
 ```
 
 ### UDP Socket
@@ -155,15 +126,6 @@ make macos
 - `receiveFrom(bytes: UByte[], length: UInt): UInt`
 - `close()`
 
-### SslSocket Class
-- `static create(socket: Socket, hostName: String): SslSocket`
-- `static createWithOptions(socket: Socket, hostName: String, verifyHostname: Bool, verifyPeer: Bool): SslSocket`
-- `send(bytes: UByte[], length: UInt): UInt`
-- `receive(bytes: UByte[], length: UInt): UInt`
-- `close()`
-- `getSocket(): Socket`
-- `getHostName(): String`
-
 ### Enums
 - `AddressFamily`: unspecified, unix, local, inet, inet6
 - `SocketType`: stream, dgram, raw, rdm, seqPacket
@@ -174,7 +136,6 @@ make macos
 ## Dependencies
 
 - **am-lang-core**: Core Am language runtime
-- **OpenSSL**: For SSL/TLS functionality (libc platforms)
 - **bsdsocket.library**: For AmigaOS socket support
 
 ## License

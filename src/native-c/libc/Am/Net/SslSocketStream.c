@@ -95,19 +95,6 @@ function_result Am_Net_SslSocketStream__native_init_0(aobject * const this)
 		goto __fail5;
     }
 
-    // Perform hostname verification
-    X509_NAME *subject_name = X509_get_subject_name(cert);
-    if (subject_name == NULL) {
-		__throw_simple_exception("Failed to get certificate subject", "in Am_Net_SslSocketStream__native_init_0", &__result);
-		goto __fail5;
-    }
-
-    // Check if hostname matches certificate CN or SAN
-    if (X509_check_host(cert, host_name_string_holder->string_value, host_name_string_holder->length, 0, NULL) != 1) {
-		__throw_simple_exception("Hostname verification failed", "in Am_Net_SslSocketStream__native_init_0", &__result);
-		goto __fail5;
-    }
-
 	ssl_socket_stream_holder * holder = calloc(1, sizeof(ssl_socket_stream_holder));
 	holder->ssl_ctx = ssl_ctx;
 	holder->ssl = ssl;
