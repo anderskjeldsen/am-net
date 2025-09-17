@@ -65,7 +65,7 @@ socket.connect("example.com", 80)
 // Send data
 var message = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
 var messageBytes = message.getBytes()
-socket.send(messageBytes, messageBytes.length as UInt)
+socket.send(messageBytes, messageBytes.length.toUInt())
 
 // Receive response
 var buffer = new UByte[1024]
@@ -91,7 +91,7 @@ var stream = new SocketStream(socket)
 // Use stream interface for easier data handling
 var request = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
 var requestBytes = request.getBytes()
-stream.write(requestBytes, 0, requestBytes.length as UInt)
+stream.write(requestBytes, 0, requestBytes.length.toUInt())
 
 // Read response using stream
 var responseBuffer = new UByte[4096]
@@ -115,7 +115,7 @@ var sslStream = new SslSocketStream(socket, "secure-server.com")
 // Use encrypted stream for secure communication
 var httpsRequest = "GET / HTTP/1.1\r\nHost: secure-server.com\r\n\r\n"
 var requestBytes = httpsRequest.getBytes()
-sslStream.write(requestBytes, 0, requestBytes.length as UInt)
+sslStream.write(requestBytes, 0, requestBytes.length.toUInt())
 
 // Read encrypted response
 var responseBuffer = new UByte[4096]
