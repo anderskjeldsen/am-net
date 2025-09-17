@@ -1,6 +1,22 @@
 
 namespace Am.Net
 {
+    enum SocketMode {
+        import Am.Lang
+        
+        blocking = 0
+        nonBlocking = 1
+    }
+
+    enum ConnectionState {
+        import Am.Lang
+        
+        disconnected = 0
+        connecting = 1
+        connected = 2
+        error = 3
+    }
+
     native class Socket
     {
         import Am.Lang
@@ -8,6 +24,7 @@ namespace Am.Net
         private var addressFamily: AddressFamily
         private var socketType: SocketType
         private var protocolFamily: ProtocolFamily
+        private var connectionState: ConnectionState = ConnectionState.disconnected
 
         static fun create(addressFamily: AddressFamily, socketType: SocketType, protocolFamily: ProtocolFamily): Socket {
             var socket = new Socket()
@@ -23,7 +40,16 @@ namespace Am.Net
         private native fun createSocket(addressFamily: AddressFamily, socketType: SocketType, protocolFamily: ProtocolFamily)
 
         fun connect(hostName: String, port: Int) {
+            this.connectionState = ConnectionState.connecting
             this.connectNative(hostName, port, this.addressFamily)
+            this.connectionState = ConnectionState.connected
+        }
+
+        fun connectWithTimeout(hostName: String, port: Int, timeoutMs: Int) {
+            this.connectionState = ConnectionState.connecting
+            this.setTimeout(timeoutMs)
+            this.connectNative(hostName, port, this.addressFamily)
+            this.connectionState = ConnectionState.connected
         }
 
         private native fun connectNative(hostName: String, port: Int, addressFamily: AddressFamily)
@@ -31,8 +57,25 @@ namespace Am.Net
         native fun send(bytes: UByte[], length: UInt): UInt
         native fun receive(bytes: UByte[], length: UInt): UInt
 
-        native fun close()
-    }
+        native fun setTimeout(timeoutMs: Int)
+        native fun setMode(mode: SocketMode)
+        native fun setKeepAlive(enabled: Bool)
+        native fun isDataAvailable(): Bool
 
+        fun close() {
+            this.closeNative()
+            this.connectionState = ConnectionState.disconnected
+        }
+
+        private native fun closeNative()
+
+        fun getConnectionState(): ConnectionState {
+            return this.connectionState
+        }
+
+        fun isConnected(): Bool {
+            return this.connectionState == ConnectionState.connected
+        }
+    }
 }
 

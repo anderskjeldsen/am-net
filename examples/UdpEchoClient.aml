@@ -1,0 +1,40 @@
+namespace Examples
+{
+    import Am.Net
+    import Am.Lang
+
+    class UdpEchoClient
+    {
+        static fun main() {
+            try {
+                // Create UDP socket
+                var udpSocket = UdpSocket.create(AddressFamily.inet)
+                
+                // Prepare message
+                var message = "Hello UDP Server!"
+                var messageBytes = message.getBytes()
+                
+                // Send to echo server
+                var sent = udpSocket.sendTo(messageBytes, messageBytes.length, "echo.example.com", 7)
+                println("Sent " + sent + " bytes: " + message)
+                
+                // Receive echo response
+                var buffer: UByte[1024]
+                var received = udpSocket.receiveFrom(buffer, buffer.length)
+                
+                if (received > 0) {
+                    // Convert received bytes back to string (simplified)
+                    println("Received " + received + " bytes echo")
+                } else {
+                    println("No response received")
+                }
+                
+                // Close socket
+                udpSocket.close()
+                
+            } catch (ex: Exception) {
+                println("Error: " + ex.getMessage())
+            }
+        }
+    }
+}

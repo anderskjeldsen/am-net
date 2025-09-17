@@ -1,0 +1,52 @@
+namespace Examples
+{
+    import Am.Net
+    import Am.Lang
+
+    class SimpleHttpClient
+    {
+        static fun main() {
+            try {
+                // Create TCP socket
+                var socket = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
+                
+                // Set timeout for connection
+                socket.setTimeout(5000)
+                
+                // Connect to web server
+                socket.connect("httpbin.org", 80)
+                
+                // Prepare HTTP request
+                var request = "GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"
+                var requestBytes = request.getBytes()
+                
+                // Send request
+                var sent = socket.send(requestBytes, requestBytes.length)
+                println("Sent " + sent + " bytes")
+                
+                // Read response
+                var buffer: UByte[4096]
+                var totalReceived = 0
+                
+                while (socket.isDataAvailable() || totalReceived == 0) {
+                    var received = socket.receive(buffer, buffer.length)
+                    if (received > 0) {
+                        totalReceived += received
+                        // Convert bytes to string and print (simplified)
+                        println("Received " + received + " bytes")
+                    } else {
+                        break
+                    }
+                }
+                
+                println("Total received: " + totalReceived + " bytes")
+                
+                // Close connection
+                socket.close()
+                
+            } catch (ex: Exception) {
+                println("Error: " + ex.getMessage())
+            }
+        }
+    }
+}
