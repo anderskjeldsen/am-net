@@ -69,7 +69,7 @@ socket.send(messageBytes, messageBytes.length as UInt)
 
 // Receive response
 var buffer = new UByte[1024]
-var bytesReceived = socket.receive(buffer, 1024u)
+var bytesReceived = socket.receive(buffer, 1024UI)
 
 // Close the socket
 socket.close()
@@ -95,7 +95,7 @@ stream.write(requestBytes, 0, requestBytes.length as UInt)
 
 // Read response using stream
 var responseBuffer = new UByte[4096]
-var bytesRead = stream.read(responseBuffer, 0, 4096u)
+var bytesRead = stream.read(responseBuffer, 0, 4096UI)
 ```
 
 ### SSL/TLS Socket Example
@@ -119,7 +119,7 @@ sslStream.write(requestBytes, 0, requestBytes.length as UInt)
 
 // Read encrypted response
 var responseBuffer = new UByte[4096]
-var bytesRead = sslStream.read(responseBuffer, 0, 4096u)
+var bytesRead = sslStream.read(responseBuffer, 0, 4096UI)
 ```
 
 ## API Reference
