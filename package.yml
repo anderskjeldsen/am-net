@@ -43,6 +43,15 @@ platforms:
     additionalIncludePaths:
     gccAdditionalOptions:
     gccAdditionalLibraries:
+  - id: linux-x64
+    extends: libc
+    gccCommand: gcc -O3
+    additionalHeaders:
+    additionalAsmSources:
+    additionalCSources: 
+    additionalIncludePaths:
+    gccAdditionalOptions:
+    gccAdditionalLibraries:
 
 buildTargets:
   - id: amigaos_docker
