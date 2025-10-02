@@ -2,3 +2,4 @@ builds/*
 *.generated.c
 *.o
 .DS_Store
+examples/*/builds/*
