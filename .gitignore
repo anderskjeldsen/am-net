@@ -3,3 +3,4 @@ builds/*
 *.o
 .DS_Store
 examples/*/builds/*
+amlc.jar
