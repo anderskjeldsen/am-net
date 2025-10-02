@@ -66,3 +66,5 @@ buildTargets:
       buildPath: /work
   - id: macos
     platform: macos
+  - id: linux-x64
+    platform: linux-x64
