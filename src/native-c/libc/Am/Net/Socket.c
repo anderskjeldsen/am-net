@@ -7,6 +7,8 @@
 
 #include <unistd.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/select.h>
 
 function_result Am_Net_Socket__native_init_0(aobject * const this)
 {
@@ -177,14 +179,14 @@ function_result Am_Net_Socket_receive_0(aobject * const this, aobject * bytes, c
 	int s = this->object_properties.class_object_properties.object_data.value.int_value;				
 	if ( s < 0 )
 	{
-		__throw_simple_exception("Socket not created", "in Am_Net_Socket_send_0", &__result);
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_receive_0", &__result);
 		goto __exit;
 	}
 
 	array_holder *a_holder = (array_holder *) &bytes[1]; // bytes->object_properties.class_object_properties.object_data.value.custom_value;
 
 	if (length > a_holder->size) {
-		__throw_simple_exception("Receive length is bigger than array", "in Am_Net_Socket_send_0", &__result);
+		__throw_simple_exception("Receive length is bigger than array", "in Am_Net_Socket_receive_0", &__result);
 		goto __exit;
 	}
 
@@ -224,12 +226,176 @@ function_result Am_Net_Socket_close_0(aobject * const this)
 	int s = this->object_properties.class_object_properties.object_data.value.int_value;				
 	if ( s < 0 )
 	{
-		__throw_simple_exception("Socket not created", "in Am_Net_Socket_send_0", &__result);
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_close_0", &__result);
 		goto __exit;
 	}
 
 	close(s);
 	this->object_properties.class_object_properties.object_data.value.int_value = -1;
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_closeNative_0(aobject * const this)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	// Add reference count for this in Socket.closeNative
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;				
+	if ( s < 0 )
+	{
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_closeNative_0", &__result);
+		goto __exit;
+	}
+
+	close(s);
+	this->object_properties.class_object_properties.object_data.value.int_value = -1;
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_setTimeout_0(aobject * const this, int timeoutMs)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s < 0)
+	{
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_setTimeout_0", &__result);
+		goto __exit;
+	}
+
+	struct timeval timeout;
+	timeout.tv_sec = timeoutMs / 1000;
+	timeout.tv_usec = (timeoutMs % 1000) * 1000;
+
+	if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0 ||
+		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0)
+	{
+		__throw_simple_exception("Failed to set socket timeout", "in Am_Net_Socket_setTimeout_0", &__result);
+		goto __exit;
+	}
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_setMode_0(aobject * const this, int mode)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s < 0)
+	{
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_setMode_0", &__result);
+		goto __exit;
+	}
+
+	int flags = fcntl(s, F_GETFL, 0);
+	if (flags < 0)
+	{
+		__throw_simple_exception("Failed to get socket flags", "in Am_Net_Socket_setMode_0", &__result);
+		goto __exit;
+	}
+
+	if (mode == 1) { // non-blocking
+		flags |= O_NONBLOCK;
+	} else { // blocking
+		flags &= ~O_NONBLOCK;
+	}
+
+	if (fcntl(s, F_SETFL, flags) < 0)
+	{
+		__throw_simple_exception("Failed to set socket mode", "in Am_Net_Socket_setMode_0", &__result);
+		goto __exit;
+	}
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_setKeepAlive_0(aobject * const this, bool enabled)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s < 0)
+	{
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_setKeepAlive_0", &__result);
+		goto __exit;
+	}
+
+	int keepAlive = enabled ? 1 : 0;
+	if (setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive)) < 0)
+	{
+		__throw_simple_exception("Failed to set keep alive", "in Am_Net_Socket_setKeepAlive_0", &__result);
+		goto __exit;
+	}
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_isDataAvailable_0(aobject * const this)
+{
+	function_result __result = { .has_return_value = true };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s < 0)
+	{
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_isDataAvailable_0", &__result);
+		goto __exit;
+	}
+
+	fd_set readfds;
+	struct timeval timeout;
+	FD_ZERO(&readfds);
+	FD_SET(s, &readfds);
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
+
+	int result = select(s + 1, &readfds, NULL, NULL, &timeout);
+	bool dataAvailable = (result > 0 && FD_ISSET(s, &readfds));
+
+	__result.return_value.value.bool_value = dataAvailable;
+	__result.return_value.flags = PRIMITIVE_BOOL;
 
 __exit: ;
 	if (this != NULL) {
