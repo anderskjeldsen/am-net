@@ -1,0 +1,120 @@
+namespace HttpServer {
+    class SimpleHttpServer(private var port: Int) {
+        import Am.Lang
+        import Am.IO
+        import Am.Net
+
+        private var serverSocket: Socket
+        private var isRunning: Bool = false
+
+        fun start() {
+            ("Starting HTTP server on port " + this.port.toString()).println()
+            
+            // Create server socket
+            this.serverSocket = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
+            
+            // Bind to port
+            this.serverSocket.bind(this.port)
+            
+            // Listen for connections
+            this.serverSocket.listen(10)
+            
+            this.isRunning = true
+            ("HTTP server listening on port " + this.port.toString()).println()
+            
+            // Accept connections in a loop
+            this.acceptLoop()
+        }
+
+        fun stop() {
+            this.isRunning = false
+            if (this.serverSocket != null) {
+                this.serverSocket.close()
+            }
+            "HTTP server stopped".println()
+        }
+
+        private fun acceptLoop() {
+            while (this.isRunning) {
+                try {
+                    "Waiting for client connection...".println()
+                    var clientSocket = this.serverSocket.accept()
+                    "Client connected".println()
+                    
+                    // Handle the client request
+                    this.handleClient(clientSocket)
+                    
+                    // Close client connection
+                    clientSocket.close()
+                    "Client connection closed".println()
+                } catch (e: Exception) {
+                    ("Error handling client: " + e.message).println()
+                }
+            }
+        }
+
+        private fun handleClient(clientSocket: Socket) {
+            try {
+                // Create streams for communication
+                var socketStream = new SocketStream(clientSocket)
+                var inputStream = socketStream as Stream
+                var textStream = new TextStream(inputStream)
+                
+                // Read the HTTP request
+                var request = this.readHttpRequest(textStream)
+                ("Received request: " + request).println()
+                
+                // Generate and send HTTP response
+                var response = this.generateHttpResponse(request)
+                this.sendHttpResponse(textStream, response)
+                
+            } catch (e: Exception) {
+                ("Error processing client request: " + e.message).println()
+            }
+        }
+
+        private fun readHttpRequest(textStream: TextStream): String {
+            // Read some data from the socket
+            var buffer: UByte[] = new UByte[1024]
+            var bytesRead = textStream.read(buffer, 0L, 1024UI)
+            
+            var request = "GET /"
+            if (bytesRead > 0UI) {
+                try {
+                    request = String.fromBytes(buffer, "UTF-8")
+                    // Find the end of the first line
+                    var crlfIndex = request.indexOf("\r\n")
+                    if (crlfIndex >= 0) {
+                        request = request.substring(0UI, crlfIndex.toUInt())
+                    }
+                } catch (e: Exception) {
+                    request = "GET / HTTP/1.1"
+                }
+            }
+            
+            return request
+        }
+
+        private fun generateHttpResponse(request: String): String {
+            var statusLine = "HTTP/1.1 200 OK\r\n"
+            var headers = "Content-Type: text/html\r\n"
+            headers = headers + "Connection: close\r\n"
+            
+            var body = "<html><head><title>AmLang HTTP Server</title></head>"
+            body = body + "<body>"
+            body = body + "<h1>Welcome to AmLang HTTP Server!</h1>"
+            body = body + "<p>Request received: " + request + "</p>"
+            body = body + "<p>Server is running successfully on port " + this.port.toString() + "</p>"
+            body = body + "</body></html>"
+            
+            var contentLength = "Content-Length: " + body.length().toString() + "\r\n"
+            
+            return statusLine + headers + contentLength + "\r\n" + body
+        }
+
+        private fun sendHttpResponse(textStream: TextStream, response: String) {
+            // Send response as string
+            textStream.writeString(response)
+        }
+    }
+}

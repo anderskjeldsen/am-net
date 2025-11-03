@@ -13,3 +13,7 @@ struct _socket_holder {
 };
 
 typedef struct _socket_holder socket_holder;
+
+function_result Am_Net_Socket_bindNative_0(aobject * const this, int port, int addressFamily);
+function_result Am_Net_Socket_listenNative_0(aobject * const this, int backlog);
+function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * clientSocket);

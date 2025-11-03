@@ -7,6 +7,9 @@
 
 #include <unistd.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 function_result Am_Net_Socket__native_init_0(aobject * const this)
 {
@@ -234,6 +237,113 @@ function_result Am_Net_Socket_close_0(aobject * const this)
 __exit: ;
 	if (this != NULL) {
 		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_bindNative_0(aobject * const this, int port, int addressFamily)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	struct sockaddr_in server_addr;
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	
+	if (s < 0) {
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_bindNative_0", &__result);
+		goto __exit;
+	}
+
+	memset(&server_addr, 0, sizeof(server_addr));
+	server_addr.sin_family = addressFamily;
+	server_addr.sin_addr.s_addr = INADDR_ANY;
+	server_addr.sin_port = htons(port);
+
+	printf("Binding socket %d to port %d\n", s, port);
+	
+	int result = bind(s, (struct sockaddr *)&server_addr, sizeof(server_addr));
+	if (result < 0) {
+		__throw_simple_exception("Unable to bind socket", "in Am_Net_Socket_bindNative_0", &__result);
+		goto __exit;
+	}
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_listenNative_0(aobject * const this, int backlog)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	
+	if (s < 0) {
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_listenNative_0", &__result);
+		goto __exit;
+	}
+
+	printf("Setting socket %d to listen with backlog %d\n", s, backlog);
+	
+	int result = listen(s, backlog);
+	if (result < 0) {
+		__throw_simple_exception("Unable to listen on socket", "in Am_Net_Socket_listenNative_0", &__result);
+		goto __exit;
+	}
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	return __result;
+};
+
+function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * clientSocket)
+{
+	function_result __result = { .has_return_value = false };
+	bool __returning = false;
+	if (this != NULL) {
+		__increase_reference_count(this);
+	}
+	if (clientSocket != NULL) {
+		__increase_reference_count(clientSocket);
+	}
+
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	
+	if (s < 0) {
+		__throw_simple_exception("Socket not created", "in Am_Net_Socket_acceptNative_0", &__result);
+		goto __exit;
+	}
+
+	printf("Waiting for connection on socket %d\n", s);
+	
+	int client_socket = accept(s, (struct sockaddr *)&client_addr, &client_len);
+	if (client_socket < 0) {
+		__throw_simple_exception("Unable to accept connection", "in Am_Net_Socket_acceptNative_0", &__result);
+		goto __exit;
+	}
+
+	printf("Accepted connection, client socket: %d\n", client_socket);
+	clientSocket->object_properties.class_object_properties.object_data.value.int_value = client_socket;
+
+__exit: ;
+	if (this != NULL) {
+		__decrease_reference_count(this);
+	}
+	if (clientSocket != NULL) {
+		__decrease_reference_count(clientSocket);
 	}
 	return __result;
 };

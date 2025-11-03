@@ -1,0 +1,20 @@
+namespace HttpServer {
+    class Program {
+        import Am.Lang
+        import Am.IO
+
+        static fun main() {
+            "AmLang HTTP Server Example".println()
+            "========================".println()
+            
+            var port = 8080
+            var server = new SimpleHttpServer(port)
+            
+            try {
+                server.start()
+            } catch (e: Exception) {
+                ("Failed to start server: " + e.message).println()
+            }
+        }
+    }
+}

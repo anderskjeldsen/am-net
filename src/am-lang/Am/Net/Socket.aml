@@ -28,6 +28,29 @@ namespace Am.Net
 
         private native fun connectNative(hostName: String, port: Int, addressFamily: AddressFamily)
 
+        fun bind(port: Int) {
+            this.bindNative(port, this.addressFamily)
+        }
+
+        private native fun bindNative(port: Int, addressFamily: AddressFamily)
+
+        fun listen(backlog: Int) {
+            this.listenNative(backlog)
+        }
+
+        private native fun listenNative(backlog: Int)
+
+        fun accept(): Socket {
+            var clientSocket = new Socket()
+            clientSocket.addressFamily = this.addressFamily
+            clientSocket.socketType = this.socketType
+            clientSocket.protocolFamily = this.protocolFamily
+            this.acceptNative(clientSocket)
+            return clientSocket
+        }
+
+        private native fun acceptNative(clientSocket: Socket)
+
         native fun send(bytes: UByte[], length: UInt): UInt
         native fun receive(bytes: UByte[], length: UInt): UInt
 

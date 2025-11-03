@@ -7,7 +7,7 @@ namespace SocketTest {
         static fun main() {
             "connect to localhost".println()
             var s = Socket.create(AddressFamily.inet, SocketType.stream, ProtocolFamily.unspecified)
-            s.connect("localhost", 9030)
+            s.connect("localhost", 8080)
             "connected".println()
 
             var socketStream = new SocketStream(s)
