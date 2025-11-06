@@ -1,6 +1,6 @@
 
 id: am-net
-version: 0.6.1
+version: 0.7.0
 type: library
 dependencies:
   - id: am-lang-core

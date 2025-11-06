@@ -10,11 +10,8 @@ dependencies:
     branch: master
     url: https://github.com/anderskjeldsen/am-lang-core.git
   - id: am-net
-    realm: github
-    type: git-repo
-    tag: latest
-    branch: master
-    url: https://github.com/anderskjeldsen/am-net.git
+    type: local
+    path: ../..
 platforms:
   - id: libc
     abstract: true

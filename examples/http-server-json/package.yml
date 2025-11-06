@@ -3,14 +3,26 @@ version: 1.0.0
 type: application
 dependencies:
   - id: am-lang-core
-    type: local
-    path: ../../../am-lang-core
+    realm: github
+    type: git-repo
+    tag: latest
+    branch: master
+    url: https://github.com/anderskjeldsen/am-lang-core.git
+  - id: am-json
+    realm: github
+    type: git-repo
+    tag: latest
+    branch: master
+    url: https://github.com/anderskjeldsen/am-json.git
+#  - id: am-lang-core
+#    type: local
+#    path: ../../../am-lang-core
+#  - id: am-json
+#    type: local
+#    path: ../../../am-json
   - id: am-net
     type: local
     path: ../..
-  - id: am-json
-    type: local
-    path: ../../../am-json
 platforms:
   - id: libc
     abstract: true
