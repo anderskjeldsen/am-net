@@ -43,6 +43,15 @@ platforms:
     additionalIncludePaths:
     gccAdditionalOptions:
     gccAdditionalLibraries:
+  - id: macos-arm
+    extends: libc
+    gccCommand: gcc -O3
+    additionalHeaders:
+    additionalAsmSources:
+    additionalCSources: 
+    additionalIncludePaths:
+    gccAdditionalOptions:
+    gccAdditionalLibraries:
   - id: linux-x64
     extends: libc
     gccCommand: gcc -O3
@@ -66,5 +75,7 @@ buildTargets:
       buildPath: /work
   - id: macos
     platform: macos
+  - id: macos-arm
+    platform: macos-arm
   - id: linux-x64
     platform: linux-x64
