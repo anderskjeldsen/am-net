@@ -51,8 +51,8 @@ namespace Am.Net
 
         private native fun acceptNative(clientSocket: Socket)
 
-        native fun send(bytes: UByte[], length: UInt): UInt
-        native fun receive(bytes: UByte[], length: UInt): UInt
+        native fun send(bytes: UByte[], offset: Long, length: UInt): UInt
+        native fun receive(bytes: UByte[], offset: Long, length: UInt): UInt
 
         native fun close()
     }

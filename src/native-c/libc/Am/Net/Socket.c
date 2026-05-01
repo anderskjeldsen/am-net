@@ -118,7 +118,7 @@ __exit: ;
 	return __result;
 };
 
-function_result Am_Net_Socket_send_0(aobject * const this, aobject * bytes, const unsigned int length)
+function_result Am_Net_Socket_send_0(aobject * const this, aobject * bytes, const long long offset, const unsigned int length)
 {
 	function_result __result = { .has_return_value = true };
 	bool __returning = false;
@@ -139,14 +139,14 @@ function_result Am_Net_Socket_send_0(aobject * const this, aobject * bytes, cons
 
 	array_holder *a_holder = (array_holder *) &bytes[1]; // bytes->object_properties.class_object_properties.object_data.value.custom_value;
 
-	if (length > a_holder->size) {
+	if ((unsigned long long)offset + length > a_holder->size) {
 		__throw_simple_exception("Send length is bigger than array", "in Am_Net_Socket_send_0", &__result);
 		__returning = true;
 		goto __exit;
 	}
 
 //	printf("Sending: %s\n", array_holder->array_data);
-	int sent = send(s, a_holder->array_data, length, 0);
+	int sent = send(s, a_holder->array_data + offset, length, 0);
 
 	if (sent < 0)
 	{
@@ -166,7 +166,7 @@ __exit: ;
 	return __result;
 };
 
-function_result Am_Net_Socket_receive_0(aobject * const this, aobject * bytes, const unsigned int length)
+function_result Am_Net_Socket_receive_0(aobject * const this, aobject * bytes, const long long offset, const unsigned int length)
 {
 	function_result __result = { .has_return_value = true };
 	bool __returning = false;
@@ -186,12 +186,12 @@ function_result Am_Net_Socket_receive_0(aobject * const this, aobject * bytes, c
 
 	array_holder *a_holder = (array_holder *) &bytes[1]; // bytes->object_properties.class_object_properties.object_data.value.custom_value;
 
-	if (length > a_holder->size) {
+	if ((unsigned long long)offset + length > a_holder->size) {
 		__throw_simple_exception("Receive length is bigger than array", "in Am_Net_Socket_send_0", &__result);
 		goto __exit;
 	}
 
-	int received = recv(s, a_holder->array_data, length, 0);
+	int received = recv(s, a_holder->array_data + offset, length, 0);
 //	printf("Received %d bytes\n", received);
 //	printf("Received data: %s\n", array_holder->array_data);
 

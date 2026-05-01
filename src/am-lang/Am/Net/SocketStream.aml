@@ -7,11 +7,11 @@ namespace Am.Net
         import Am.IO
 
         fun read(buffer: UByte[], offset: Long, length: UInt): UInt {
-            return this.socket.receive(buffer, length)
+            return this.socket.receive(buffer, offset, length)
         }
 
         fun write(buffer: UByte[], offset: Long, length: UInt) {
-            this.socket.send(buffer, length)
+            this.socket.send(buffer, offset, length)
         }
 
         fun seekFromStart(offset: Long) {
