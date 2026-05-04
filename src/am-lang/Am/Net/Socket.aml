@@ -1,6 +1,14 @@
 
 namespace Am.Net
 {
+    // libc-derived targets (linux-*, macos-*, etc.) share a single POSIX
+    // implementation that calls socket() / send() / recv() etc. via
+    // libnix's wrappers. AmigaOS m68k needs its own file that dispatches
+    // the same calls through `<proto/socket.h>` against an explicit
+    // SocketBase — that's the only fd path AmiSSL accepts when wrapping
+    // the socket in an SslSocketStream. See
+    // src/native-c/amigaos/Am/Net/Socket.c for details.
+    #implementationPlatforms "libc", "amigaos"
     native class Socket
     {
         import Am.Lang
