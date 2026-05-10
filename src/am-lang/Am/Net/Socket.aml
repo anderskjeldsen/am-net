@@ -8,7 +8,7 @@ namespace Am.Net
     // SocketBase — that's the only fd path AmiSSL accepts when wrapping
     // the socket in an SslSocketStream. See
     // src/native-c/amigaos/Am/Net/Socket.c for details.
-    #implementationPlatforms "libc", "amigaos"
+    #implementationPlatforms "libc", "amigaos", "morphos-ppc"
     native class Socket
     {
         import Am.Lang
