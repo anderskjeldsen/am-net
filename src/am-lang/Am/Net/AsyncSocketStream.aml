@@ -1,0 +1,135 @@
+namespace Am.Net {
+
+    // Suspend-friendly stream view over a regular Socket. Every
+    // blocking syscall (`send` / `receive` / `close`) gets dispatched
+    // onto the TaskScheduler IO worker; the caller suspends until the
+    // worker resumes the continuation. From the caller's POV it reads
+    // like a regular blocking API, but the calling thread (typically
+    // Main) doesn't actually block — it just keeps pumping its event
+    // loop until the IO worker is done.
+    //
+    // The connect step itself is now done by
+    // `Socket.createOnIOThreadAsync(host, port)` — one canonical
+    // factory that creates + connects + (on AmigaOS) brings up the
+    // worker's per-task bsdsocket slot, all inside the same IO-worker
+    // dispatch. AsyncSocketStream.connectAsync just calls it and wraps
+    // the result.
+    //
+    // Renamed from `AsyncSocket` (2026-05-28) to match the parallel
+    // `AsyncSecureSocketStream` in am-ssl and to be honest about what
+    // this class is: a stream over a socket fd, no bind/listen/accept.
+    //
+    // Platform note: Continuation is libc-only at the moment
+    // (Am.Async.Continuation.aml). #implementationPlatforms is only
+    // valid on native classes, so non-libc builds that compile this
+    // file will fail on Continuation's missing implementation —
+    // intentional, until suspend support exists everywhere.
+    class AsyncSocketStream {
+        import Am.Lang
+        import Am.Async
+        import Am.Threading
+
+        // The connected Socket — populated by connectAsync via the
+        // shared factory.
+        var inner: Socket
+
+        // Connect a fresh TCP socket on the TaskScheduler IO worker.
+        // Suspends the caller until the worker is done. Throws if the
+        // factory throws.
+        static suspend fun connectAsync(host: String, port: Int): AsyncSocketStream {
+            var s = Socket.createOnIOThreadAsync(host, port)
+            var result = new AsyncSocketStream()
+            result.inner = s
+            return result
+        }
+
+        // --- Async-native I/O surface --------------------------------
+        //
+        // Per-call result/error stashing matches the factory's shape
+        // — a fresh holder object is allocated for each call to keep
+        // results isolated. (Reusing `this` for outcomes would make
+        // overlapping calls on the same stream trample each other.)
+
+        suspend fun sendAsync(bytes: UByte[], offset: Long, length: UInt): UInt {
+            var holder = new AsyncIoResult()
+            var s = this.inner
+            suspend(cont) {
+                var task: () => Bool = () => {
+                    try {
+                        holder.result = s.send(bytes, offset, length)
+                    } catch (e: Exception) {
+                        holder.errorMessage = e.toString()
+                    }
+                    cont.resume()
+                    return true
+                }
+                TaskScheduler.schedule(TaskThreadType.IO, task)
+            }
+            if (holder.errorMessage != null) {
+                throw new Exception("sendAsync failed: " + holder.errorMessage)
+            }
+            return holder.result
+        }
+
+        suspend fun receiveAsync(bytes: UByte[], offset: Long, length: UInt): UInt {
+            var holder = new AsyncIoResult()
+            var s = this.inner
+            suspend(cont) {
+                var task: () => Bool = () => {
+                    try {
+                        holder.result = s.receive(bytes, offset, length)
+                    } catch (e: Exception) {
+                        holder.errorMessage = e.toString()
+                    }
+                    cont.resume()
+                    return true
+                }
+                TaskScheduler.schedule(TaskThreadType.IO, task)
+            }
+            if (holder.errorMessage != null) {
+                throw new Exception("receiveAsync failed: " + holder.errorMessage)
+            }
+            return holder.result
+        }
+
+        suspend fun closeAsync() {
+            var holder = new AsyncIoResult()
+            var s = this.inner
+            suspend(cont) {
+                var task: () => Bool = () => {
+                    try {
+                        s.close()
+                    } catch (e: Exception) {
+                        holder.errorMessage = e.toString()
+                    }
+                    cont.resume()
+                    return true
+                }
+                TaskScheduler.schedule(TaskThreadType.IO, task)
+            }
+            if (holder.errorMessage != null) {
+                throw new Exception("closeAsync failed: " + holder.errorMessage)
+            }
+        }
+
+        // Expose the wrapped Socket for callers that need to wrap it
+        // in an SslSocketStream / SocketStream. Currently no public
+        // caller — AsyncSecureSocketStream uses
+        // `Socket.createOnIOThreadAsync` directly via `createAsync`
+        // — but kept for STARTTLS-style scenarios where a caller
+        // wants to upgrade an existing plain stream to TLS later.
+        fun getSocket(): Socket {
+            return this.inner
+        }
+    }
+
+    // Per-call result holder for the suspend I/O methods on
+    // AsyncSocketStream / AsyncSecureSocketStream. Plain box for a
+    // single value-or-error outcome; allocated fresh per call so
+    // overlapping calls don't trample each other.
+    class AsyncIoResult {
+        import Am.Lang
+        var result: UInt = 0UI
+        var errorMessage: String = null
+    }
+}

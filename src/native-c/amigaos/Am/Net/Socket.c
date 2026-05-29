@@ -42,15 +42,369 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+#include <exec/tasks.h>
+
 __attribute__((weak)) struct Library *SocketBase = NULL;
+
+// Per-AmLang-Thread tracker of "this task has called OpenLibrary on
+// bsdsocket.library and we owe it one CloseLibrary at task exit".
+//
+// Why per-task: bsdsocket.library keeps per-task state keyed by
+// FindTask(NULL) — errno location, signal handler, socket list. A
+// task that uses sockets without having called OpenLibrary itself
+// shares the base pointer fine (it's the same struct Library * for
+// everyone) but has no per-task slot, which kills SSL handshakes
+// even when raw socket() works (amiberry's bsdsocket_emu happens to
+// be lenient about this; Miami/RoadShow are not).
+//
+// We don't write to the global SocketBase from per-task opens — that
+// pointer is owned by amisslauto (or by the first-ever opener via
+// the fallback below) and is the same value every OpenLibrary call
+// returns. Per-task opens only matter for the side effect.
+//
+// The list is keyed by the AmLang Thread aobject pointer rather than
+// struct Task * so it survives the cleanup ordering on amigaos: the
+// finalizer runs from inside the task that opened, but uses the same
+// Thread identity that nativeInit registered with.
+//
+// `socket_base` is the per-task bsdsocket base — what THIS task got
+// back from its own `OpenLibrary("bsdsocket.library", 4)`. Roadshow
+// / Miami / amiberry default semantics: each opener gets its own
+// base, NOT a shared one (AmiSSL dev confirmed).
+//
+// `task` is the AmigaOS Task pointer the bsdsocket open ran on; the
+// tc_Launch handler reads `SysBase->ThisTask` and walks this list
+// to find the matching entry, then sets the global SocketBase to
+// node->socket_base. That way proto/socket.h inlines that
+// dereference the global pick up the right per-task base on every
+// dispatch into this task. AmiSSL gets the same per-task base via
+// `InitAmiSSL(AmiSSL_SocketBase, …)` so SSL_read/SSL_write also
+// route through the right slot.
+//
+// `launch_installed` is a guard so we only wire tc_Launch + TF_LAUNCH
+// once per task — re-installs would clobber any other handler that
+// might have set them (none today; AmLang owns its worker tasks).
+struct bsd_task_node {
+    aobject *thread;
+    struct Library *socket_base;
+    struct Task *task;
+    int launch_installed;
+    struct bsd_task_node *next;
+};
+
+// Stashed at program startup via the #runOnStartup hook in this
+// file (Am_Net_Socket_captureMainSocketBase_0 below). amisslauto
+// opens bsdsocket on the main task at constructor time and writes
+// the global SocketBase; we capture that value before any worker
+// has a chance to overwrite the global, so the worker's finalizer
+// can restore it before amisslauto's destructor closes it.
+static struct Library *main_socket_base = NULL;
+
+static struct bsd_task_node *bsd_task_list = NULL;
+
+// Forbid()/Permit() is the simplest mutual exclusion across AmigaOS
+// tasks — used because the same TaskScheduler IO worker could be
+// touching the list concurrently with a future second worker.
+static int bsd_task_is_registered(aobject *thread)
+{
+    struct bsd_task_node *n;
+    int found = 0;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            found = 1;
+            break;
+        }
+    }
+    Permit();
+    return found;
+}
+
+static void bsd_task_register(aobject *thread, struct Library *socket_base, struct Task *task)
+{
+    struct bsd_task_node *node = (struct bsd_task_node *) malloc(sizeof(struct bsd_task_node));
+    if (node == NULL) {
+        return;
+    }
+    node->thread = thread;
+    node->socket_base = socket_base;
+    node->task = task;
+    node->launch_installed = 0;
+    Forbid();
+    node->next = bsd_task_list;
+    bsd_task_list = node;
+    Permit();
+}
+
+// Look up the per-task node by AmLang Thread identity. Linear scan
+// (the list is small — one entry per AmLang worker that touched
+// bsdsocket); only called on bring-up and teardown.
+static struct bsd_task_node *bsd_task_lookup_node(aobject *thread)
+{
+    struct bsd_task_node *n;
+    struct bsd_task_node *found = NULL;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            found = n;
+            break;
+        }
+    }
+    Permit();
+    return found;
+}
+
+// Public accessor for am-ssl (and any other consumer) to obtain the
+// CURRENT task's bsdsocket base — what they should pass to
+// InitAmiSSL via AmiSSL_SocketBase. Returns NULL on the main task or
+// a non-AmLang task (caller should fall back to the global
+// SocketBase amisslauto set up in those cases).
+struct Library *am_net_current_task_socket_base(void)
+{
+    struct Task *me = FindTask(NULL);
+    if (me == NULL) {
+        return NULL;
+    }
+    aobject *thread = (aobject *) me->tc_UserData;
+    if (thread == NULL) {
+        return NULL;
+    }
+    struct bsd_task_node *node = bsd_task_lookup_node(thread);
+    if (node == NULL) {
+        return NULL;
+    }
+    return node->socket_base;
+}
+
+// tc_Launch handler — Exec invokes this every time this task is
+// dispatched (gets the CPU). The handler walks bsd_task_list to
+// find the entry whose `task` matches the currently-running Task,
+// then sets the global SocketBase to that entry's per-task base.
+// If no entry matches (e.g. main task — main never opens bsdsocket
+// itself, amisslauto does it for it), we fall back to
+// main_socket_base which was stashed by the `#runOnStartup` hook.
+//
+// Installed on BOTH the main task (via captureMainSocketBase) and
+// every AmLang worker task that touches bsdsocket (via
+// install_launch_handler below). Each dispatch into either context
+// puts the right base in the global before any proto/socket.h
+// inline runs.
+//
+// Runs from the dispatcher with the task's own SP — regular
+// user-stack semantics, but should be small + fast. Uses the
+// global `SysBase` from proto/exec.h.
+static void bsdsocket_launch(void)
+{
+    struct Task *me = SysBase->ThisTask;
+    if (me == NULL) {
+        return;
+    }
+    struct bsd_task_node *n;
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->task == me) {
+            SocketBase = n->socket_base;
+            return;
+        }
+    }
+    // No worker entry for this task — main task, or any non-AmLang
+    // task that doesn't manage its own per-task base. Use the main
+    // task's saved base (captured at #runOnStartup time).
+    if (main_socket_base != NULL) {
+        SocketBase = main_socket_base;
+    }
+}
+
+// Wire the tc_Launch handler onto the given task once. Idempotent
+// per node. Forbid() so the writes to tc_Launch and tc_Flags are
+// visible to the dispatcher in one go.
+static void install_launch_handler(struct bsd_task_node *node)
+{
+    if (node == NULL || node->launch_installed) {
+        return;
+    }
+    Forbid();
+    if (node->task != NULL) {
+        node->task->tc_Launch = (APTR) bsdsocket_launch;
+        node->task->tc_Flags |= TF_LAUNCH;
+        node->launch_installed = 1;
+    }
+    Permit();
+}
+
+// #runOnStartup hook — invoked from generated startup.c BEFORE
+// user main() runs, AFTER class init / static-property setup, so
+// `amisslauto`'s constructor has already opened bsdsocket on the
+// main task and written the global SocketBase.
+//
+// Two things we do here:
+//   1. Stash the main task's bsdsocket base. tc_Launch uses it as
+//      the fallback for any task that doesn't have its own entry
+//      in bsd_task_list (i.e. main itself, and any non-AmLang task).
+//   2. Install tc_Launch on the main task. Every dispatch INTO
+//      main then sets `SocketBase = main_socket_base` — race-free,
+//      no matter what value a worker may have written to the
+//      global while running. (Trying to restore in #runOnExit
+//      instead would race with workers still running; tc_Launch
+//      handles it at the dispatcher level.)
+function_result Am_Net_Socket_captureMainSocketBase_0(void)
+{
+    function_result __result = { .has_return_value = false };
+    main_socket_base = SocketBase;
+    struct Task *main_task = FindTask(NULL);
+    if (main_task != NULL) {
+        Forbid();
+        main_task->tc_Launch = (APTR) bsdsocket_launch;
+        main_task->tc_Flags |= TF_LAUNCH;
+        Permit();
+    }
+    return __result;
+}
+
+static int bsd_task_unregister(aobject *thread)
+{
+    struct bsd_task_node *prev = NULL;
+    struct bsd_task_node *n;
+    int removed = 0;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            if (prev == NULL) {
+                bsd_task_list = n->next;
+            } else {
+                prev->next = n->next;
+            }
+            removed = 1;
+            break;
+        }
+        prev = n;
+    }
+    Permit();
+    if (removed) {
+        free(n);
+    }
+    return removed;
+}
+
+// Look up the AmLang Thread the current task is running on (set by
+// Am.Threading.Thread's _InitTask via tc_UserData). Returns NULL on
+// the main task or any task that wasn't started via AmLang Thread.
+static aobject *current_amlang_thread(void)
+{
+    struct Task *task = FindTask(NULL);
+    if (task == NULL) {
+        return NULL;
+    }
+    return (aobject *) task->tc_UserData;
+}
 
 static int ensure_socket_base(void)
 {
-    if (SocketBase) {
+    aobject *thread;
+    struct Library *lib;
+    struct Task *task;
+
+    // Legacy path: the global SocketBase isn't set yet (no
+    // amisslauto, never opened by main). Open from this task to
+    // bootstrap the pointer for everyone.
+    if (SocketBase == NULL) {
+        SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
+        if (SocketBase == NULL) {
+            return 0;
+        }
+        // If this happened on an AmLang Thread, register it so the
+        // matching CloseLibrary runs at task exit + install the
+        // launch handler so subsequent dispatches restore this base.
+        thread = current_amlang_thread();
+        if (thread != NULL && !bsd_task_is_registered(thread)) {
+            task = FindTask(NULL);
+            bsd_task_register(thread, SocketBase, task);
+            install_launch_handler(bsd_task_lookup_node(thread));
+            Am_Net_Socket_f_nativeInit_0();
+        }
         return 1;
     }
-    SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
-    return (SocketBase != NULL);
+
+    // Hot path: SocketBase is already set (amisslauto opened it on
+    // main task at constructor time). For the main task itself
+    // there's nothing more to do — keep using the global. For an
+    // AmLang worker thread, do THIS thread's own OpenLibrary; the
+    // returned base may differ from the main task's base under
+    // Roadshow/Miami/amiberry default semantics. Capture it, install
+    // tc_Launch so each dispatch into this worker swaps the global
+    // to its own base, and set the global right now (we're on the
+    // worker task) so calls between here and the first
+    // context-switch see the right one.
+    thread = current_amlang_thread();
+    if (thread == NULL) {
+        // Main task — already covered by amisslauto. Nothing to do.
+        return 1;
+    }
+    if (bsd_task_is_registered(thread)) {
+        return 1;
+    }
+    lib = OpenLibrary((STRPTR)"bsdsocket.library", 4);
+    if (lib == NULL) {
+        return 0;
+    }
+    task = FindTask(NULL);
+    bsd_task_register(thread, lib, task);
+    install_launch_handler(bsd_task_lookup_node(thread));
+    SocketBase = lib;
+    // Hand control back to AmLang so the Thread.addFinalizer call is
+    // a real lambda registration through the normal codegen path,
+    // rather than a C-side handle we'd have to invent a finalizer-
+    // dispatch protocol for.
+    Am_Net_Socket_f_nativeInit_0();
+    return 1;
+}
+
+// Counterpart to the per-task `OpenLibrary` above. Reached via the
+// Thread finalizer that Socket.nativeInit() registered, so the call
+// site is on the same task that opened.
+//
+// Two things to undo:
+//   1. Clear tc_Launch + TF_LAUNCH so the dispatcher stops firing
+//      our handler — both because the node is about to be freed,
+//      and because the task itself is exiting (Exec doesn't strictly
+//      need us to clear, but a dangling handler pointer with the
+//      flag still set is a foot-gun).
+//   2. CloseLibrary on the PER-TASK base captured in the node — not
+//      the global SocketBase, since those may differ under
+//      Roadshow/Miami/amiberry default semantics.
+//
+// We deliberately do NOT touch the global SocketBase here. That's
+// the main task's tc_Launch handler's job — every dispatch INTO
+// main sets `SocketBase = main_socket_base` automatically (see
+// bsdsocket_launch). Touching the global from the worker's
+// finalizer would race with main if main was already running:
+// main's tc_Launch would have just set it correctly, and our store
+// from the worker could undo that before main reaches the next
+// socket call.
+function_result Am_Net_Socket_closeBsdsocketForThread_0()
+{
+    function_result __result = { .has_return_value = false };
+    aobject *thread = current_amlang_thread();
+    if (thread == NULL) {
+        return __result;
+    }
+    struct bsd_task_node *node = bsd_task_lookup_node(thread);
+    struct Library *to_close = NULL;
+    if (node != NULL) {
+        to_close = node->socket_base;
+        Forbid();
+        if (node->task != NULL && node->launch_installed) {
+            node->task->tc_Flags &= ~TF_LAUNCH;
+            node->task->tc_Launch = NULL;
+            node->launch_installed = 0;
+        }
+        Permit();
+    }
+    if (bsd_task_unregister(thread)) {
+        if (to_close != NULL) {
+            CloseLibrary(to_close);
+        }
+    }
+    return __result;
 }
 
 function_result Am_Net_Socket__native_init_0(aobject * const this)
@@ -98,9 +452,7 @@ function_result Am_Net_Socket_createSocket_0(aobject * const this, int addressFa
         goto __exit;
     }
 
-    printf("create socket %d, %d, %d\n", addressFamily, socketType, protocolFamily);
     s = socket(addressFamily, socketType, protocolFamily);
-    printf("newsocket %d\n", s);
     if (s < 0) {
         __throw_simple_exception("Unable to create socket", "in Am_Net_Socket_createSocket_0", &__result);
         goto __exit;
@@ -134,14 +486,12 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
 
     host_name_holder = hostName->object_properties.class_object_properties.object_data.value.custom_value;
 
-    printf("host name: %s\n", host_name_holder->string_value);
     he = gethostbyname((STRPTR)host_name_holder->string_value);
     if (!he) {
         __throw_simple_exception("Unable to resolve host", "in Am_Net_Socket_connectNative_0", &__result);
         goto __exit;
     }
 
-    printf("host: %d\n", *(int *)he->h_addr_list[0]);
     memset(&peer_addr, 0, sizeof(peer_addr));
     peer_addr.sin_addr   = *(struct in_addr *)he->h_addr_list[0];
     peer_addr.sin_family = addressFamily;
@@ -151,8 +501,9 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
                                           // AmiSSL's test/https.c.
 
     s = this->object_properties.class_object_properties.object_data.value.int_value;
-    printf("socket %d\n", s);
+    printf("Socket.connect: calling connect() s=%d\n", s); fflush(stdout);
     result = connect(s, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+    printf("Socket.connect: connect() returned %d\n", result); fflush(stdout);
     if (result != 0) {
         __throw_simple_exception("Unable to connect to host", "in Am_Net_Socket_connectNative_0", &__result);
         goto __exit;

@@ -12,6 +12,8 @@ namespace Am.Net
     native class Socket
     {
         import Am.Lang
+        import Am.Async
+        import Am.Threading
 
         private var addressFamily: AddressFamily
         private var socketType: SocketType
@@ -26,6 +28,53 @@ namespace Am.Net
             socket.createSocket(addressFamily, socketType, protocolFamily)
 
             return socket
+        }
+
+        // Suspend factory: creates a TCP Socket and connects it to
+        // `host:port` ON the TaskScheduler.IO worker task, then
+        // suspends the caller until that's done. Returns the
+        // connected Socket.
+        //
+        // Why this lives on Socket: the IO-worker dispatch + the
+        // bsdsocket per-task slot setup that fires inside
+        // `Socket.create()` on AmigaOS need to happen on the SAME
+        // Amiga task. Centralising both under one factory means
+        // every async layer (AsyncSocketStream, AsyncSecureSocketStream)
+        // gets the same guarantee without duplicating the dispatch
+        // boilerplate — and any caller that wraps the returned
+        // Socket has to do so inside an IO-worker context, which is
+        // exactly what they do today.
+        //
+        // Sharp edge: the returned Socket's fd belongs to the IO
+        // worker task. Don't use it directly from Main — wrap it in
+        // an AsyncSocketStream / SslSocketStream / AsyncSecureSocketStream
+        // and let those dispatch all I/O back to the IO worker. The
+        // wrappers will only be safe so long as their lifetimes
+        // overlap with the same TaskScheduler.IO task.
+        static suspend fun createOnIOThreadAsync(host: String, port: Int): Socket {
+            var holder = new SocketCreateResult()
+            suspend(cont) {
+                var task: () => Bool = () => {
+                    try {
+                        var s = Socket.create(
+                            AddressFamily.inet,
+                            SocketType.stream,
+                            ProtocolFamily.unspecified)
+                        s.connect(host, port)
+                        holder.socket = s
+                    } catch (e: Exception) {
+                        holder.errorMessage = e.toString()
+                    }
+                    cont.resume()
+                    return true
+                }
+                TaskScheduler.schedule(TaskThreadType.IO, task)
+            }
+            if (holder.errorMessage != null) {
+                throw new Exception(
+                    "Socket.createOnIOThreadAsync failed: " + holder.errorMessage)
+            }
+            return holder.socket
         }
 
         private native fun createSocket(addressFamily: AddressFamily, socketType: SocketType, protocolFamily: ProtocolFamily)
@@ -63,6 +112,61 @@ namespace Am.Net
         native fun receive(bytes: UByte[], offset: Long, length: UInt): UInt
 
         native fun close()
+
+        // Per-thread bsdsocket bookkeeping hook. Called by the native
+        // amigaos / morphos-ppc Socket.c the first time the current
+        // AmigaOS task touches bsdsocket.library — after the C side has
+        // done that task's own `OpenLibrary("bsdsocket.library", 4)`
+        // for the per-task registration side effect. We register a
+        // Thread finalizer here so that when the AmLang worker thread
+        // ends (TaskRunner shutdown, suspend-IO worker drain, etc.),
+        // the per-task `CloseLibrary` runs from inside the same task
+        // that opened — matching what bsdsocket.library tracks via
+        // `FindTask(NULL)`. Non-amigaos backends never call this and
+        // the body is a no-op there.
+        //
+        // `private` so application code can't trigger it directly —
+        // the only legitimate caller is the native `createSocket()`
+        // bring-up path on amigaos / morphos-ppc.
+        private static fun nativeInit() {
+            var t = Thread.getCurrent()
+            if (t != null) {
+                var fn: () => Bool = () => {
+                    Socket.closeBsdsocketForThread()
+                    return true
+                }
+                t.addFinalizer(fn)
+            }
+        }
+
+        // Counterpart of nativeInit's per-task `OpenLibrary`. Removes
+        // the current task from the per-task tracker and decrements
+        // bsdsocket's per-task open count via `CloseLibrary`. Dispatched
+        // from inside the finalizer above, so by the time it runs we
+        // are still on the worker task and `FindTask(NULL)` resolves
+        // to the task that opened the library.
+        private static native fun closeBsdsocketForThread()
+
+        // Stash the main task's bsdsocket base (amisslauto opened it
+        // in its constructor before main() runs). The worker
+        // finalizer restores this value into the global SocketBase
+        // when a worker exits, so amisslauto's destructor at process
+        // exit CloseLibrary's the right base — not the worker's
+        // already-closed one. Compiler injects a call to this from
+        // generated startup.c, right before user main(). Non-amigaos
+        // backends just have a no-op native.
+        #runOnStartup
+        static native fun captureMainSocketBase()
+    }
+
+    // Holder for Socket.createOnIOThreadAsync — the IO-worker task
+    // writes one of `socket` (success) or `errorMessage` (failure)
+    // before resuming the continuation. Internal — callers see only
+    // a Socket return or a thrown Exception.
+    class SocketCreateResult {
+        import Am.Lang
+        var socket: Socket = null
+        var errorMessage: String = null
     }
 
 }

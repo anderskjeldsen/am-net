@@ -11,6 +11,27 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+// No-op on libc backends — bsdsocket per-task bookkeeping is amigaos /
+// morphos-ppc only. The AmLang lambda that targets this symbol is built
+// for every platform (Socket.nativeInit() exists everywhere), but only
+// the amigaos / morphos-ppc native createSocket paths actually call
+// Socket.nativeInit() to register the finalizer that fires this.
+function_result Am_Net_Socket_closeBsdsocketForThread_0()
+{
+	function_result __result = { .has_return_value = false };
+	return __result;
+}
+
+// libc no-op for the amigaos `#runOnStartup` SocketBase capture
+// hook. The compiler injects a call to this from generated
+// startup.c on every platform; on libc backends there's no
+// SocketBase to stash, so the body is empty.
+function_result Am_Net_Socket_captureMainSocketBase_0(void)
+{
+	function_result __result = { .has_return_value = false };
+	return __result;
+}
+
 function_result Am_Net_Socket__native_init_0(aobject * const this)
 {
 	function_result __result = { .has_return_value = false };
@@ -49,9 +70,7 @@ function_result Am_Net_Socket_createSocket_0(aobject * const this, int addressFa
 		__increase_reference_count(this);
 	}
 
-	printf("create socket %d, %d, %d\n", addressFamily, socketType, protocolFamily);
-	int s = socket(addressFamily, socketType, protocolFamily); 
-	printf("newsocket %d\n", s);
+	int s = socket(addressFamily, socketType, protocolFamily);
 	if ( s < 0 )
 	{
 		__throw_simple_exception("Unable to create socket", "in Am_Net_Socket_createSocket_0", &__result);
@@ -84,18 +103,15 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
 
 	string_holder *host_name_holder = hostName->object_properties.class_object_properties.object_data.value.custom_value;
 
-	printf("host name: %s\n", host_name_holder->string_value);
 	struct hostent * hostent = gethostbyname(host_name_holder->string_value);
 	if (hostent)
 	{
-		printf("host: %d\n", *(int *)hostent->h_addr_list[0]);
 		peer_addr.sin_addr = *(struct in_addr *) hostent->h_addr_list[0];
-		peer_addr.sin_family = addressFamily; 
-		peer_addr.sin_port =  htons(port); 
+		peer_addr.sin_family = addressFamily;
+		peer_addr.sin_port =  htons(port);
 
-		int s = this->object_properties.class_object_properties.object_data.value.int_value;				
-		printf("socket %d\n", s);
-		result = connect(s, (struct sockaddr *) &peer_addr, sizeof(struct sockaddr_in)); 
+		int s = this->object_properties.class_object_properties.object_data.value.int_value;
+		result = connect(s, (struct sockaddr *) &peer_addr, sizeof(struct sockaddr_in));
 		if ( result != 0 )
 		{
 			__throw_simple_exception("Unable to connect to host", "in Am_Net_Socket_connectNative_0", &__result);
