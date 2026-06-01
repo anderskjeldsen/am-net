@@ -13,44 +13,247 @@
 #include <Am/Lang/Array.h>
 #include <libc/core_inline_functions.h>
 
-// Morphos m68k Socket implementation. Mirrors src/native-c/libc/Am/Net/Socket.c
-// shape-for-shape, but the BSD socket calls dispatch through
-// <proto/socket.h> against an explicit `SocketBase`, and `addr.sin_len`
-// is set on connect — both required so an `SslSocketStream` wrapping
-// this socket can hand the resulting fd to AmiSSL successfully. The
-// libnix POSIX route (which the libc Socket.c uses) leaves the fd in a
-// state AmiSSL's recv()/send() wrappers don't recognise, leading to a
-// silent peer-close during the TLS handshake.
+// MorphOS PPC Socket implementation. Ported from native-c/amigaos/Am/Net/Socket.c.
 //
-// SocketBase ownership:
-//   We declare it WEAK here so that when am-ssl is also linked, am-ssl's
-//   strong definition (in src/native-c/amigaos/amissl_init.c) wins and
-//   both libraries use the *same* SocketBase. When am-net is used
-//   standalone (no am-ssl), am-net's weak definition is the only one
-//   and we're the sole owner.
+// Why per-task bsdsocket bring-up matters on MorphOS too:
+//   bsdsocket.library keeps PER-TASK state — an errno-pointer (set via
+//   SetErrnoPtr), the per-task socket list, signal masks — keyed by
+//   FindTask(NULL). Sharing a SocketBase pointer across tasks does NOT
+//   share that state. An AmLang worker (`task-runner-1`) that calls
+//   socket() / connect() without its own OpenLibrary + SetErrnoPtr will
+//   write through whatever errno pointer was installed by the OPENING
+//   task and walk uninitialised per-task slots, crashing in 68k
+//   bsdsocket code (typically as a LineF in trance.library because
+//   the corrupted slot is read as a function pointer).
 //
-//   Either way, the first `Socket.create()` lazily opens
-//   bsdsocket.library v4 if SocketBase is still NULL — bsdsocket is
-//   per-task and idempotent across multiple opens in the same task,
-//   so calling OpenLibrary again later from am-ssl is safe.
+//   This mirrors the AmiSSL/m68k bug the amigaos port already handles.
+//   Same Exec API on MorphOS, same fix: a per-task tc_Launch handler
+//   swaps the global `SocketBase` to the task's own base on every
+//   dispatch into the task, and each AmLang worker that touches
+//   bsdsocket does its own OpenLibrary + SetErrnoPtr the first time.
+//
+// SocketBase is WEAK so that if a future am-ssl-style helper provides
+// a strong definition, both libraries share the same global pointer.
+// When am-net is used standalone, this is the sole owner.
 
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <proto/exec.h>
 #include <proto/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 
+#include <exec/tasks.h>
+#include <exec/execbase.h>
+
 __attribute__((weak)) struct Library *SocketBase = NULL;
+
+// Per-AmLang-Thread tracker of "this task has called OpenLibrary on
+// bsdsocket.library and we owe it one CloseLibrary at task exit". See
+// the amigaos sibling file for the full rationale — the contract is
+// identical on MorphOS. Keyed by the AmLang Thread aobject pointer
+// rather than struct Task * so the entry survives the cleanup ordering
+// (the finalizer fires from inside the task that opened, but registers
+// under the same Thread identity nativeInit used).
+struct bsd_task_node {
+    aobject *thread;
+    struct Library *socket_base;
+    struct Task *task;
+    int launch_installed;
+    struct bsd_task_node *next;
+};
+
+// Captured at #runOnStartup from the main task — see
+// Am_Net_Socket_captureMainSocketBase_0 below. tc_Launch falls back to
+// this for any task that doesn't have its own bsd_task_list entry.
+static struct Library *main_socket_base = NULL;
+
+static struct bsd_task_node *bsd_task_list = NULL;
+
+static int bsd_task_is_registered(aobject *thread)
+{
+    struct bsd_task_node *n;
+    int found = 0;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            found = 1;
+            break;
+        }
+    }
+    Permit();
+    return found;
+}
+
+static void bsd_task_register(aobject *thread, struct Library *socket_base, struct Task *task)
+{
+    struct bsd_task_node *node = (struct bsd_task_node *) malloc(sizeof(struct bsd_task_node));
+    if (node == NULL) {
+        return;
+    }
+    node->thread = thread;
+    node->socket_base = socket_base;
+    node->task = task;
+    node->launch_installed = 0;
+    Forbid();
+    node->next = bsd_task_list;
+    bsd_task_list = node;
+    Permit();
+}
+
+static struct bsd_task_node *bsd_task_lookup_node(aobject *thread)
+{
+    struct bsd_task_node *n;
+    struct bsd_task_node *found = NULL;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            found = n;
+            break;
+        }
+    }
+    Permit();
+    return found;
+}
+
+// tc_Launch handler — Exec invokes this every time the task gets the
+// CPU. Walk bsd_task_list to find the entry whose `task` matches and
+// swap the global SocketBase to that entry's per-task base. Falls
+// back to main_socket_base so the main task (which has no entry)
+// still has a valid global on dispatch.
+static void bsdsocket_launch(void)
+{
+    struct Task *me = SysBase->ThisTask;
+    if (me == NULL) {
+        return;
+    }
+    struct bsd_task_node *n;
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->task == me) {
+            SocketBase = n->socket_base;
+            return;
+        }
+    }
+    if (main_socket_base != NULL) {
+        SocketBase = main_socket_base;
+    }
+}
+
+static void install_launch_handler(struct bsd_task_node *node)
+{
+    if (node == NULL || node->launch_installed) {
+        return;
+    }
+    Forbid();
+    if (node->task != NULL) {
+        node->task->tc_Launch = (APTR) bsdsocket_launch;
+        node->task->tc_Flags |= TF_LAUNCH;
+        node->launch_installed = 1;
+    }
+    Permit();
+}
+
+static int bsd_task_unregister(aobject *thread)
+{
+    struct bsd_task_node *prev = NULL;
+    struct bsd_task_node *n;
+    int removed = 0;
+    Forbid();
+    for (n = bsd_task_list; n != NULL; n = n->next) {
+        if (n->thread == thread) {
+            if (prev == NULL) {
+                bsd_task_list = n->next;
+            } else {
+                prev->next = n->next;
+            }
+            removed = 1;
+            break;
+        }
+        prev = n;
+    }
+    Permit();
+    if (removed) {
+        free(n);
+    }
+    return removed;
+}
+
+// Look up the AmLang Thread the current task is running on. Set by
+// Am.Threading.Thread's _InitTask via tc_UserData on MorphOS too
+// (see native-c/morphos-ppc/Am/Threading/Thread.c). Returns NULL on
+// the main task or any task not started via AmLang Thread.
+static aobject *current_amlang_thread(void)
+{
+    struct Task *task = FindTask(NULL);
+    if (task == NULL) {
+        return NULL;
+    }
+    return (aobject *) task->tc_UserData;
+}
+
+// Forward decl — AmLang side registers the finalizer.
+extern function_result Am_Net_Socket_f_nativeInit_0(void);
 
 static int ensure_socket_base(void)
 {
-    if (SocketBase) {
+    aobject *thread;
+    struct Library *lib;
+    struct Task *task;
+
+    // Legacy path: the global SocketBase isn't set yet (no main-task
+    // opener has run). Open from this task to bootstrap.
+    if (SocketBase == NULL) {
+        SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
+        if (SocketBase == NULL) {
+            return 0;
+        }
+        // bsdsocket per-task contract: tell the library where THIS
+        // task's errno lives. libnix's errno is already per-task on
+        // -noixemul builds, so &errno on the worker resolves to the
+        // worker's slot.
+        SetErrnoPtr(&errno, sizeof(errno));
+        thread = current_amlang_thread();
+        if (thread != NULL && !bsd_task_is_registered(thread)) {
+            task = FindTask(NULL);
+            bsd_task_register(thread, SocketBase, task);
+            install_launch_handler(bsd_task_lookup_node(thread));
+            Am_Net_Socket_f_nativeInit_0();
+        }
         return 1;
     }
-    SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
-    return (SocketBase != NULL);
+
+    // Hot path: SocketBase is already set (main task opened it at
+    // #runOnStartup time). For the main task there's nothing more to
+    // do. For an AmLang worker, do THIS task's own OpenLibrary +
+    // SetErrnoPtr so bsdsocket initialises the worker's per-task slot.
+    // The returned base MAY differ from the main task's under
+    // Roadshow/Miami-style stacks; capture it, install tc_Launch so
+    // each dispatch into this worker swaps the global to its own
+    // base, then store the global now (we're on the worker).
+    thread = current_amlang_thread();
+    if (thread == NULL) {
+        // Main task — already wired by captureMainSocketBase. Nothing
+        // to do.
+        return 1;
+    }
+    if (bsd_task_is_registered(thread)) {
+        return 1;
+    }
+    lib = OpenLibrary((STRPTR)"bsdsocket.library", 4);
+    if (lib == NULL) {
+        return 0;
+    }
+    task = FindTask(NULL);
+    bsd_task_register(thread, lib, task);
+    install_launch_handler(bsd_task_lookup_node(thread));
+    SocketBase = lib;
+    SetErrnoPtr(&errno, sizeof(errno));
+    // Hand control back to AmLang so the Thread.addFinalizer call is
+    // a real lambda registration through the normal codegen path.
+    Am_Net_Socket_f_nativeInit_0();
+    return 1;
 }
 
 function_result Am_Net_Socket__native_init_0(aobject * const this)
@@ -399,6 +602,69 @@ __exit: ;
     }
     if (clientSocket != NULL) {
         __decrease_reference_count(clientSocket);
+    }
+    return __result;
+}
+
+// #runOnStartup hook — invoked from generated startup.c before
+// user main() runs. Two things:
+//   1. Stash whatever SocketBase value the main task's startup left
+//      behind (if any). tc_Launch uses this as the fallback for
+//      tasks that don't have their own bsd_task_list entry.
+//   2. Install tc_Launch on the main task so every dispatch INTO
+//      main restores `SocketBase = main_socket_base` — race-free
+//      against worker writes to the global.
+//
+// On MorphOS we don't have an amisslauto-style constructor that
+// pre-opens bsdsocket; SocketBase may still be NULL at this point.
+// That's fine — `ensure_socket_base` on first use from any task
+// handles the lazy open, and once any task has opened it the
+// global is non-NULL for the rest of process lifetime.
+function_result Am_Net_Socket_captureMainSocketBase_0(void)
+{
+    function_result __result = { .has_return_value = false };
+    main_socket_base = SocketBase;
+    struct Task *main_task = FindTask(NULL);
+    if (main_task != NULL) {
+        Forbid();
+        main_task->tc_Launch = (APTR) bsdsocket_launch;
+        main_task->tc_Flags |= TF_LAUNCH;
+        Permit();
+    }
+    return __result;
+}
+
+// Counterpart to the per-task `OpenLibrary` in `ensure_socket_base`.
+// Reached via the Thread finalizer that nativeInit() registered, so
+// the call site is on the same task that opened. We:
+//   1. Clear tc_Launch + TF_LAUNCH on the worker (the node is about
+//      to be freed and the task itself is exiting).
+//   2. CloseLibrary on the PER-TASK base captured in the node — not
+//      the global SocketBase, which the main task's tc_Launch handler
+//      restores on its next dispatch.
+function_result Am_Net_Socket_closeBsdsocketForThread_0(void)
+{
+    function_result __result = { .has_return_value = false };
+    aobject *thread = current_amlang_thread();
+    if (thread == NULL) {
+        return __result;
+    }
+    struct bsd_task_node *node = bsd_task_lookup_node(thread);
+    struct Library *to_close = NULL;
+    if (node != NULL) {
+        to_close = node->socket_base;
+        Forbid();
+        if (node->task != NULL && node->launch_installed) {
+            node->task->tc_Flags &= ~TF_LAUNCH;
+            node->task->tc_Launch = NULL;
+            node->launch_installed = 0;
+        }
+        Permit();
+    }
+    if (bsd_task_unregister(thread)) {
+        if (to_close != NULL) {
+            CloseLibrary(to_close);
+        }
     }
     return __result;
 }
