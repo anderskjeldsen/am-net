@@ -165,8 +165,8 @@ namespace Am.Net
     // a Socket return or a thrown Exception.
     class SocketCreateResult {
         import Am.Lang
-        var socket: Socket = null
-        var errorMessage: String = null
+        var socket: Socket? = null
+        var errorMessage: String? = null
     }
 
 }
