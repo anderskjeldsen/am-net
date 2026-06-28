@@ -256,6 +256,57 @@ static int ensure_socket_base(void)
     return 1;
 }
 
+// --------- Open-fd registry ------------------------------------------------
+//
+// Mirrors the libc Socket.c registry but uses `Forbid()`/`Permit()` and
+// `CloseSocket()`. See the libc file for the rationale on why this
+// lives in C instead of an AmLang-side `List<Socket>`.
+#define AM_NET_MAX_OPEN_FDS 256
+
+static int s_open_fds[AM_NET_MAX_OPEN_FDS];
+static int s_open_fds_count = 0;
+
+static void am_net_register_fd(int fd) {
+    if (fd < 0) return;
+    Forbid();
+    if (s_open_fds_count < AM_NET_MAX_OPEN_FDS) {
+        s_open_fds[s_open_fds_count++] = fd;
+    }
+    Permit();
+}
+
+static void am_net_unregister_fd(int fd) {
+    if (fd < 0) return;
+    Forbid();
+    for (int i = 0; i < s_open_fds_count; i++) {
+        if (s_open_fds[i] == fd) {
+            s_open_fds[i] = s_open_fds[--s_open_fds_count];
+            break;
+        }
+    }
+    Permit();
+}
+
+function_result Am_Net_Socket_closeAllOpenFds_0(void)
+{
+    function_result __result = { .has_return_value = false };
+    int count;
+    int fds[AM_NET_MAX_OPEN_FDS];
+    Forbid();
+    count = s_open_fds_count;
+    for (int i = 0; i < count; i++) {
+        fds[i] = s_open_fds[i];
+    }
+    s_open_fds_count = 0;
+    Permit();
+    if (SocketBase != NULL) {
+        for (int i = 0; i < count; i++) {
+            CloseSocket(fds[i]);
+        }
+    }
+    return __result;
+}
+
 function_result Am_Net_Socket__native_init_0(aobject * const this)
 {
     function_result __result = { .has_return_value = false };
@@ -274,6 +325,15 @@ function_result Am_Net_Socket__native_release_0(aobject * const this)
 {
     function_result __result = { .has_return_value = false };
     bool __returning = false;
+    // Backstop for users who let a Socket go out of scope without
+    // calling `close()`. ARC sweeps the aobject; we CloseSocket() the
+    // OS fd and remove it from the shutdown registry.
+    int s = this->object_properties.class_object_properties.object_data.value.int_value;
+    if (s >= 0 && SocketBase != NULL) {
+        am_net_unregister_fd(s);
+        CloseSocket(s);
+        this->object_properties.class_object_properties.object_data.value.int_value = -1;
+    }
 __exit: ;
     return __result;
 }
@@ -310,6 +370,9 @@ function_result Am_Net_Socket_createSocket_0(aobject * const this, int addressFa
     }
 
     this->object_properties.class_object_properties.object_data.value.int_value = s;
+    // Register in the shutdown-closure list so closeAllOpenFds can
+    // wake any blocked recv()/send() on this fd at process exit.
+    am_net_register_fd(s);
 
 __exit: ;
     if (this != NULL) {
@@ -485,6 +548,7 @@ function_result Am_Net_Socket_close_0(aobject * const this)
     // bsdsocket-on-Amiga sockets MUST be closed with CloseSocket(), not
     // libnix's close(). close() routes through DOS file descriptors and
     // would leak the bsdsocket entry.
+    am_net_unregister_fd(s);
     CloseSocket(s);
     this->object_properties.class_object_properties.object_data.value.int_value = -1;
 
@@ -595,6 +659,7 @@ function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * cli
 
     printf("Accepted connection, client socket: %d\n", client_socket);
     clientSocket->object_properties.class_object_properties.object_data.value.int_value = client_socket;
+    am_net_register_fd(client_socket);
 
 __exit: ;
     if (this != NULL) {

@@ -157,6 +157,30 @@ namespace Am.Net
         // backends just have a no-op native.
         #runOnStartup
         static native fun captureMainSocketBase()
+
+        // Closes every socket fd that's been opened via this class
+        // and not yet `close()`'d. The native side keeps a static
+        // C-level registry (no AmLang-side List<Socket> — that would
+        // cycle on `property_reference_count` and stop ARC from
+        // collecting Sockets that the user forgot to close until
+        // shutdown anyway).
+        //
+        // Compiler injects a call to this from generated startup.c
+        // between `main()` returning and `TaskScheduler.stopAll()`,
+        // so any worker thread parked inside `recv()`/`send()`/
+        // `connect()` wakes with EBADF/ECONNRESET before
+        // TaskScheduler tries to join it. The native impl `shutdown`s
+        // each fd (where supported) then `close`s it; the exception
+        // surfaces in the worker, propagates through the suspend
+        // chain (post-cancellation-codegen fix in FunctionCallRenderer),
+        // and the worker unwinds out of `TaskRunner.run()`.
+        //
+        // Private — no AmLang user code calls this directly. Visibility
+        // is enforced at resolution time; the generated startup.c call
+        // bypasses the `private` check the same way other `#runOnExit`
+        // hooks do.
+        #runOnExit
+        private static native fun closeAllOpenFds()
     }
 
     // Holder for Socket.createOnIOThreadAsync — the IO-worker task

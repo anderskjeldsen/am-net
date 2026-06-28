@@ -10,6 +10,69 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <pthread.h>
+
+// --------- Open-fd registry ------------------------------------------------
+//
+// Tracks every socket fd that has been opened via this AmLang `Socket`
+// class and not yet closed. The shutdown hook (`#runOnExit` ->
+// `closeAllOpenFds`) iterates this list and `shutdown()` + `close()`
+// each entry so any worker thread blocked in `recv()`/`send()`/`connect()`
+// wakes with `EBADF`/`ECONNRESET`. The thrown exception propagates
+// through the suspend chain (codegen fix in FunctionCallRenderer that
+// re-throws child suspend exceptions at the resume label) and the
+// worker unwinds out of `TaskRunner.run()` before the runtime sweep.
+//
+// Why a C-side list and not an AmLang `List<Socket>`:
+//   - An AmLang strong-ref list would bump `property_reference_count`
+//     and keep every Socket aobject alive until shutdown, defeating the
+//     `__native_release_0` backstop and leaking the aobjects between
+//     close and shutdown.
+//   - A weak-ref list would work but `Weak<T>` has no `.aml` shim in
+//     the V1 tree (only native plumbing), so we'd be reviving a
+//     half-finished feature.
+//   - Tracking fds in C is the cleanest: no ARC interaction, no cycle,
+//     and the per-platform `Socket.c` already owns the rest of the
+//     fd lifecycle (`socket()`, `close()`).
+//
+// Sizing: 1024 simultaneous open sockets is generous for AmLang
+// programs — IDE chat clients hold 1, web servers maybe a few dozen.
+// If a workload outgrows this we'd switch to a dynamic array; for now
+// the static cap keeps the code allocation-free.
+
+#define AM_NET_MAX_OPEN_FDS 1024
+
+static pthread_mutex_t s_open_fds_lock = PTHREAD_MUTEX_INITIALIZER;
+static int s_open_fds[AM_NET_MAX_OPEN_FDS];
+static int s_open_fds_count = 0;
+
+static void am_net_register_fd(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&s_open_fds_lock);
+    if (s_open_fds_count < AM_NET_MAX_OPEN_FDS) {
+        s_open_fds[s_open_fds_count++] = fd;
+    }
+    // Over-cap: drop the registration silently. Shutdown still closes
+    // every other fd we know about; the leaked one is reclaimed by the
+    // kernel at process exit. Bumping the cap is cheaper than a dynamic
+    // resize and we'd rather not allocate from inside socket()/accept().
+    pthread_mutex_unlock(&s_open_fds_lock);
+}
+
+static void am_net_unregister_fd(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&s_open_fds_lock);
+    for (int i = 0; i < s_open_fds_count; i++) {
+        if (s_open_fds[i] == fd) {
+            // Compact by swapping last element into the freed slot —
+            // O(1) and the order doesn't matter since shutdown closes
+            // all of them.
+            s_open_fds[i] = s_open_fds[--s_open_fds_count];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&s_open_fds_lock);
+}
 
 // No-op on libc backends — bsdsocket per-task bookkeeping is amigaos /
 // morphos-ppc only. The AmLang lambda that targets this symbol is built
@@ -20,6 +83,34 @@ function_result Am_Net_Socket_closeBsdsocketForThread_0()
 {
 	function_result __result = { .has_return_value = false };
 	return __result;
+}
+
+// Compiler-injected via `#runOnExit` on the AmLang side. Closes every
+// fd we registered in `createSocket` / `acceptNative` and never saw
+// `close()`'d. The `shutdown(..., SHUT_RDWR)` first is what wakes a
+// thread parked in `recv()`/`send()` — `close()` alone is permitted
+// to be deferred by the kernel until the in-flight syscall completes
+// on some platforms, but shutdown forces the half-close immediately.
+function_result Am_Net_Socket_closeAllOpenFds_0(void)
+{
+    function_result __result = { .has_return_value = false };
+    pthread_mutex_lock(&s_open_fds_lock);
+    int count = s_open_fds_count;
+    int fds[AM_NET_MAX_OPEN_FDS];
+    for (int i = 0; i < count; i++) {
+        fds[i] = s_open_fds[i];
+    }
+    s_open_fds_count = 0;
+    pthread_mutex_unlock(&s_open_fds_lock);
+    // shutdown + close OUTSIDE the lock — close() can block briefly on
+    // a TCP linger, and we don't want a slow close to stall a
+    // concurrent register/unregister from another worker that hasn't
+    // noticed shutdown yet.
+    for (int i = 0; i < count; i++) {
+        shutdown(fds[i], SHUT_RDWR);
+        close(fds[i]);
+    }
+    return __result;
 }
 
 // libc no-op for the amigaos `#runOnStartup` SocketBase capture
@@ -50,6 +141,17 @@ function_result Am_Net_Socket__native_release_0(aobject * const this)
 {
 	function_result __result = { .has_return_value = false };
 	bool __returning = false;
+	// Backstop for users who let a Socket go out of scope without
+	// calling `close()`. ARC sweeps the aobject; we close the OS fd
+	// and remove it from the shutdown registry so it isn't double-
+	// closed by `closeAllOpenFds`. A fd of -1 means `close()` already
+	// ran, which is the normal path.
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s >= 0) {
+		am_net_unregister_fd(s);
+		close(s);
+		this->object_properties.class_object_properties.object_data.value.int_value = -1;
+	}
 __exit: ;
 	return __result;
 };
@@ -78,6 +180,9 @@ function_result Am_Net_Socket_createSocket_0(aobject * const this, int addressFa
 	}
 
 	this->object_properties.class_object_properties.object_data.value.int_value = s;
+	// Register in the shutdown-closure list so closeAllOpenFds can
+	// wake any blocked recv()/send() on this fd at process exit.
+	am_net_register_fd(s);
 
 __exit: ;
 	if (this != NULL) {
@@ -247,6 +352,7 @@ function_result Am_Net_Socket_close_0(aobject * const this)
 		goto __exit;
 	}
 
+	am_net_unregister_fd(s);
 	close(s);
 	this->object_properties.class_object_properties.object_data.value.int_value = -1;
 
@@ -353,6 +459,9 @@ function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * cli
 
 	printf("Accepted connection, client socket: %d\n", client_socket);
 	clientSocket->object_properties.class_object_properties.object_data.value.int_value = client_socket;
+	// Same registry contract as `createSocket` — the accept()'d fd
+	// must be tracked so closeAllOpenFds reaches it at shutdown.
+	am_net_register_fd(client_socket);
 
 __exit: ;
 	if (this != NULL) {
