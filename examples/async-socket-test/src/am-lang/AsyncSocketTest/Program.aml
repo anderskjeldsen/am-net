@@ -1,0 +1,50 @@
+namespace AsyncSocketTest {
+
+    // Tiny smoke test for Am.Net.AsyncSocketStream. Asks for a TCP connect
+    // to example.com:80 via connectAsync; the actual socket()/connect()
+    // happens on the TaskScheduler's IO thread, the caller suspends
+    // until it's done.
+    //
+    // Note: this test keeps the post-resume body very simple. The
+    // suspend codegen still has a couple of sharp edges around
+    // variable declarations that span the suspend point (you'll hit
+    // `redefinition of '__varN'` if the resumed code re-evaluates an
+    // expression chain). Once those are smoothed out we can do
+    // request/response over the socket inline.
+    class Program {
+        import Am.Lang
+        import Am.Async
+        import Am.IO
+        import Am.Net
+        import Am.Threading
+
+        static fun main() {
+            Program.run()
+            Thread.sleep(3000L)
+            "main: returning to runtime".println()
+        }
+
+        suspend static fun run() {
+            "main: connecting to example.com:80 (async)".println()
+            var sock = AsyncSocketStream.connectAsync("example.com", 80)
+            "main: connectAsync returned — socket is connected".println()
+
+            // Tiny HTTP/1.0 GET to actually exercise per-task SocketBase
+            // (tc_Launch). connect alone wouldn't prove the IO worker's
+            // SSL/recv codepath; send + receive on the worker do.
+            var request: UByte[] = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n".toBytes("UTF-8")
+            "main: sendAsync".println()
+            var sent = sock.sendAsync(request, 0L, request.length())
+            ("main: sent " + sent.toString() + " bytes").println()
+
+            var buf = new UByte[1024]
+            "main: receiveAsync".println()
+            var got = sock.receiveAsync(buf, 0L, buf.length())
+            ("main: received " + got.toString() + " bytes").println()
+
+            "main: closeAsync".println()
+            sock.closeAsync()
+            "main: socket closed, done".println()
+        }
+    }
+}
