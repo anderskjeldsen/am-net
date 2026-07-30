@@ -41,6 +41,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 
 #include <exec/tasks.h>
 
@@ -746,7 +748,13 @@ function_result Am_Net_Socket_bindNative_0(aobject * const this, int port, int a
     server_addr.sin_port        = htons(port);
     server_addr.sin_len         = sizeof(struct in_addr);
 
-    printf("Binding socket %d to port %d\n", s, port);
+    // SO_REUSEADDR so a restart / second instance can re-bind the
+    // port while the old socket lingers in TIME_WAIT (see libc file).
+    {
+        int reuse = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *) &reuse, sizeof(reuse));
+    }
+
     result = bind(s, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (result < 0) {
         __throw_simple_exception("Unable to bind socket", "in Am_Net_Socket_bindNative_0", &__result);
@@ -834,4 +842,129 @@ __exit: ;
         __decrease_reference_count(clientSocket);
     }
     return __result;
+}
+
+// Detect this machine's own outbound IP via UDP-connect + getsockname,
+// against bsdsocket.library. See the AmLang doc-comment on
+// Socket.getLocalIpAddress. Returns the dotted-quad string, or "" when
+// there's no route / bsdsocket can't open (no TCP-IP stack running).
+function_result Am_Net_Socket_getLocalIpAddress_0(void)
+{
+	function_result __result = { .has_return_value = true };
+	char ip[64];
+	ip[0] = '\0';
+
+	if (ensure_socket_base()) {
+		int fd = socket(AF_INET, SOCK_DGRAM, 0);
+		if (fd >= 0) {
+			struct sockaddr_in peer;
+			memset(&peer, 0, sizeof(peer));
+			peer.sin_family = AF_INET;
+			peer.sin_port   = htons(53);
+			peer.sin_len    = sizeof(struct in_addr);  // bsdsocket wants non-zero
+			// Any routable address — UDP connect sends nothing, it just
+			// forces a route lookup so getsockname reports our interface.
+			peer.sin_addr.s_addr = inet_addr((STRPTR) "8.8.8.8");
+			if (connect(fd, (struct sockaddr *) &peer, sizeof(peer)) == 0) {
+				struct sockaddr_in me;
+				LONG len = sizeof(me);
+				memset(&me, 0, sizeof(me));
+				if (getsockname(fd, (struct sockaddr *) &me, &len) == 0) {
+					char *p = (char *) Inet_NtoA(me.sin_addr.s_addr);
+					if (p != NULL) {
+						strncpy(ip, p, sizeof(ip) - 1);
+						ip[sizeof(ip) - 1] = '\0';
+					}
+				}
+			}
+			CloseSocket(fd);
+		}
+	}
+
+	__result.return_value.value.object_value = __create_string(ip, &Am_Lang_String);
+	return __result;
+}
+// Enumerate every non-loopback IPv4 address via SIOCGIFCONF against
+// bsdsocket. Falls back to the single default-route address
+// (UDP-connect + getsockname) when the stack's interface walk yields
+// nothing. Returns them comma-separated. See the AmLang doc-comment
+// on Socket.getLocalIpAddresses.
+function_result Am_Net_Socket_getLocalIpAddresses_0(void)
+{
+	function_result __result = { .has_return_value = true };
+	char list[512];
+	list[0] = '\0';
+
+	if (ensure_socket_base()) {
+		int fd = socket(AF_INET, SOCK_DGRAM, 0);
+		if (fd >= 0) {
+			static char ifbuf[4096];
+			struct ifconf ifc;
+			memset(&ifc, 0, sizeof(ifc));
+			ifc.ifc_len = sizeof(ifbuf);
+			ifc.ifc_buf = ifbuf;
+			if (IoctlSocket(fd, SIOCGIFCONF, (char *) &ifc) == 0) {
+				char *ptr  = ifbuf;
+				char *stop = ifbuf + ifc.ifc_len;
+				while (ptr < stop) {
+					struct ifreq *ifr = (struct ifreq *) ptr;
+					// BSD 4.4 sockaddr carries sa_len; entries are
+					// variable-length. Clamp to a full struct sockaddr
+					// so a zero sa_len can't stall the walk.
+					int salen = ifr->ifr_addr.sa_len;
+					if (salen < (int) sizeof(struct sockaddr)) {
+						salen = sizeof(struct sockaddr);
+					}
+					if (ifr->ifr_addr.sa_family == AF_INET) {
+						struct sockaddr_in *sin = (struct sockaddr_in *) &ifr->ifr_addr;
+						unsigned long ho = ntohl(sin->sin_addr.s_addr);
+						if ((ho >> 24) != 127 && sin->sin_addr.s_addr != 0) {
+							char *ip = (char *) Inet_NtoA(sin->sin_addr.s_addr);
+							if (ip != NULL) {
+								size_t used = strlen(list);
+								size_t need = strlen(ip) + (used > 0 ? 1 : 0);
+								if (used + need < sizeof(list)) {
+									if (used > 0) { list[used++] = ','; list[used] = '\0'; }
+									strcat(list, ip);
+								}
+							}
+						}
+					}
+					ptr += sizeof(ifr->ifr_name) + salen;
+				}
+			}
+			CloseSocket(fd);
+		}
+	}
+
+	if (list[0] == '\0') {
+		// Fallback: single default-route address.
+		if (ensure_socket_base()) {
+			int fd = socket(AF_INET, SOCK_DGRAM, 0);
+			if (fd >= 0) {
+				struct sockaddr_in peer;
+				memset(&peer, 0, sizeof(peer));
+				peer.sin_family = AF_INET;
+				peer.sin_port   = htons(53);
+				peer.sin_len    = sizeof(struct in_addr);
+				peer.sin_addr.s_addr = inet_addr((STRPTR) "8.8.8.8");
+				if (connect(fd, (struct sockaddr *) &peer, sizeof(peer)) == 0) {
+					struct sockaddr_in me;
+					LONG len = sizeof(me);
+					memset(&me, 0, sizeof(me));
+					if (getsockname(fd, (struct sockaddr *) &me, &len) == 0) {
+						char *ip = (char *) Inet_NtoA(me.sin_addr.s_addr);
+						if (ip != NULL) {
+							strncpy(list, ip, sizeof(list) - 1);
+							list[sizeof(list) - 1] = '\0';
+						}
+					}
+				}
+				CloseSocket(fd);
+			}
+		}
+	}
+
+	__result.return_value.value.object_value = __create_string(list, &Am_Lang_String);
+	return __result;
 }

@@ -113,6 +113,36 @@ namespace Am.Net
 
         native fun close()
 
+        // Best-effort detection of this machine's own LAN/internet IP
+        // — the address a peer on the network would reach us on. Works
+        // uniformly across libc (Linux/macOS) and bsdsocket
+        // (AmigaOS/MorphOS) via the "UDP connect + getsockname" trick:
+        // open a datagram socket, `connect()` it toward a routable
+        // address (which only does a route lookup, sends nothing), then
+        // read the local address the OS bound it to.
+        //
+        // Returns a dotted-quad string ("192.168.1.42"), or "" when it
+        // can't be determined (no route / no TCP-IP stack). The caller
+        // should treat "" (and "0.0.0.0") as "detection failed, fall
+        // back to manual entry".
+        //
+        // Requires a running TCP/IP stack on Amiga/MorphOS (RoadShow /
+        // AmiTCP / Miami); returns "" if bsdsocket.library can't open.
+        static native fun getLocalIpAddress(): String
+
+        // Enumerate EVERY non-loopback IPv4 address on the machine —
+        // for a machine with several interfaces (Wi-Fi + Ethernet + VPN
+        // + Docker bridge, …) this lists them all so the user can see
+        // which one another computer should connect to. Returns a
+        // comma-separated string ("192.168.1.8,10.0.0.5"), or "" when
+        // none are found / no TCP-IP stack.
+        //
+        // Backend: getifaddrs() on libc (Linux/macOS); SIOCGIFCONF on
+        // AmigaOS/MorphOS bsdsocket, which falls back to the single
+        // default-route address (getLocalIpAddress) if the stack's
+        // interface-config walk yields nothing.
+        static native fun getLocalIpAddresses(): String
+
         // Per-thread bsdsocket bookkeeping hook. Called by the native
         // amigaos / morphos-ppc Socket.c the first time the current
         // AmigaOS task touches bsdsocket.library — after the C side has

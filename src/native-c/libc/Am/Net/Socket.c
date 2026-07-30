@@ -2,6 +2,7 @@
 #include <Am/Net/Socket.h>
 #include <libc/Am/Net/Socket.h>
 #include <Am/Lang/Object.h>
+#include <Am/Lang/String.h>
 #include <Am/Net/AddressFamily.h>
 #include <libc/core_inline_functions.h>
 
@@ -9,8 +10,11 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 // --------- Open-fd registry ------------------------------------------------
 //
@@ -384,8 +388,13 @@ function_result Am_Net_Socket_bindNative_0(aobject * const this, int port, int a
 	server_addr.sin_addr.s_addr = INADDR_ANY;
 	server_addr.sin_port = htons(port);
 
-	printf("Binding socket %d to port %d\n", s, port);
-	
+	// SO_REUSEADDR so a server that was just restarted (or a second
+	// app instance re-taking the same port after the first exited)
+	// can bind while the old socket lingers in TIME_WAIT, instead of
+	// failing with EADDRINUSE.
+	int reuse = 1;
+	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const void *) &reuse, sizeof(reuse));
+
 	int result = bind(s, (struct sockaddr *)&server_addr, sizeof(server_addr));
 	if (result < 0) {
 		__throw_simple_exception("Unable to bind socket", "in Am_Net_Socket_bindNative_0", &__result);
@@ -474,3 +483,74 @@ __exit: ;
 };
 
 
+
+// Detect this machine's own outbound IP via UDP-connect + getsockname.
+// See the AmLang doc-comment on Socket.getLocalIpAddress. Returns the
+// dotted-quad string, or "" if it can't be determined.
+function_result Am_Net_Socket_getLocalIpAddress_0(void)
+{
+	function_result __result = { .has_return_value = true };
+	char ip[64];
+	ip[0] = '\0';
+
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd >= 0) {
+		struct sockaddr_in peer;
+		memset(&peer, 0, sizeof(peer));
+		peer.sin_family = AF_INET;
+		peer.sin_port = htons(53);
+		// Any routable address — no packet is sent for a UDP connect,
+		// it just forces the stack to pick the outgoing interface.
+		peer.sin_addr.s_addr = inet_addr("8.8.8.8");
+		if (connect(fd, (struct sockaddr *) &peer, sizeof(peer)) == 0) {
+			struct sockaddr_in me;
+			socklen_t len = sizeof(me);
+			memset(&me, 0, sizeof(me));
+			if (getsockname(fd, (struct sockaddr *) &me, &len) == 0) {
+				const char *p = inet_ntoa(me.sin_addr);
+				if (p != NULL) {
+					strncpy(ip, p, sizeof(ip) - 1);
+					ip[sizeof(ip) - 1] = '\0';
+				}
+			}
+		}
+		close(fd);
+	}
+
+	__result.return_value.value.object_value = __create_string(ip, &Am_Lang_String);
+	return __result;
+}
+
+// Enumerate every non-loopback IPv4 address via getifaddrs(). Returns
+// them comma-separated. See the AmLang doc-comment on
+// Socket.getLocalIpAddresses.
+function_result Am_Net_Socket_getLocalIpAddresses_0(void)
+{
+	function_result __result = { .has_return_value = true };
+	char list[512];
+	list[0] = '\0';
+
+	struct ifaddrs *ifaddr = NULL;
+	if (getifaddrs(&ifaddr) == 0) {
+		for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+			if (ifa->ifa_addr == NULL) continue;
+			if (ifa->ifa_addr->sa_family != AF_INET) continue;
+			if ((ifa->ifa_flags & IFF_UP) == 0) continue;
+			if (ifa->ifa_flags & IFF_LOOPBACK) continue;
+			struct sockaddr_in *sin = (struct sockaddr_in *) ifa->ifa_addr;
+			unsigned long hostorder = ntohl(sin->sin_addr.s_addr);
+			if ((hostorder >> 24) == 127) continue;   // belt-and-suspenders vs 127.x
+			const char *ip = inet_ntoa(sin->sin_addr);
+			if (ip == NULL) continue;
+			size_t used = strlen(list);
+			size_t need = strlen(ip) + (used > 0 ? 1 : 0);
+			if (used + need >= sizeof(list)) break;    // out of room
+			if (used > 0) { list[used++] = ','; list[used] = '\0'; }
+			strcat(list, ip);
+		}
+		freeifaddrs(ifaddr);
+	}
+
+	__result.return_value.value.object_value = __create_string(list, &Am_Lang_String);
+	return __result;
+}
