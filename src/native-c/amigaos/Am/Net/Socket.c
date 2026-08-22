@@ -48,6 +48,30 @@
 
 __attribute__((weak)) struct Library *SocketBase = NULL;
 
+// bsdsocket's non-blocking-toggle ioctl. Normally provided by the
+// socket headers above (same family as SIOCGIFCONF); guarded so a
+// leaner SDK still builds. Value is the standard BSD _IOW('f',126,int).
+#ifndef FIONBIO
+#define FIONBIO 0x8004667eUL
+#endif
+
+// Flip fd into non-blocking mode (best-effort). Placed after
+// <proto/socket.h> so IoctlSocket resolves to the SocketBase-dispatched
+// inline (not an undefined extern). Used before the route-probe
+// connect() in the getLocalIp* helpers so a UDP connect() to 8.8.8.8
+// can never stall the caller: those run synchronously on the MAIN task
+// (studio.localIp() from a Studio Transfer "Configure"), and on a LAN
+// whose default-route gateway won't ARP-resolve, a blocking connect()
+// hangs the whole IDE. For UDP the source address is assigned
+// synchronously regardless of blocking mode, so getsockname() still
+// reports our interface right after; worst case is an empty result,
+// never a freeze.
+static void am_net_set_nonblocking(int fd)
+{
+    long nb = 1;
+    IoctlSocket(fd, FIONBIO, (char *) &nb);
+}
+
 // Per-AmLang-Thread tracker of "this task has called OpenLibrary on
 // bsdsocket.library and we owe it one CloseLibrary at task exit".
 //
@@ -858,6 +882,7 @@ function_result Am_Net_Socket_getLocalIpAddress_0(void)
 		int fd = socket(AF_INET, SOCK_DGRAM, 0);
 		if (fd >= 0) {
 			struct sockaddr_in peer;
+			am_net_set_nonblocking(fd);  // connect() must never stall the main task
 			memset(&peer, 0, sizeof(peer));
 			peer.sin_family = AF_INET;
 			peer.sin_port   = htons(53);
@@ -943,6 +968,7 @@ function_result Am_Net_Socket_getLocalIpAddresses_0(void)
 			int fd = socket(AF_INET, SOCK_DGRAM, 0);
 			if (fd >= 0) {
 				struct sockaddr_in peer;
+				am_net_set_nonblocking(fd);  // connect() must never stall the main task
 				memset(&peer, 0, sizeof(peer));
 				peer.sin_family = AF_INET;
 				peer.sin_port   = htons(53);
@@ -966,5 +992,19 @@ function_result Am_Net_Socket_getLocalIpAddresses_0(void)
 	}
 
 	__result.return_value.value.object_value = __create_string(list, &Am_Lang_String);
+	return __result;
+}
+
+function_result Am_Net_Socket_setReceiveTimeoutNative_0(aobject * const this, int seconds)
+{
+	function_result __result = { .has_return_value = false };
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s >= 0 && seconds > 0) {
+		struct timeval tv;
+		tv.tv_sec = seconds;
+		tv.tv_usec = 0;
+		// Best-effort: unsupported stacks just leave the socket blocking.
+		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(tv));
+	}
 	return __result;
 }

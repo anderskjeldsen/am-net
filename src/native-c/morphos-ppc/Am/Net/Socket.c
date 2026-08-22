@@ -863,3 +863,17 @@ function_result Am_Net_Socket_getLocalIpAddresses_0(void)
 	__result.return_value.value.object_value = __create_string(list, &Am_Lang_String);
 	return __result;
 }
+
+function_result Am_Net_Socket_setReceiveTimeoutNative_0(aobject * const this, int seconds)
+{
+	function_result __result = { .has_return_value = false };
+	int s = this->object_properties.class_object_properties.object_data.value.int_value;
+	if (s >= 0 && seconds > 0) {
+		struct timeval tv;
+		tv.tv_sec = seconds;
+		tv.tv_usec = 0;
+		// Best-effort: unsupported stacks just leave the socket blocking.
+		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(tv));
+	}
+	return __result;
+}

@@ -85,6 +85,18 @@ namespace Am.Net
 
         private native fun connectNative(hostName: String, port: Int, addressFamily: AddressFamily)
 
+        /**
+         * Best-effort receive timeout: a blocking read on this socket fails
+         * after roughly `seconds` instead of hanging forever on a stalled
+         * peer (SO_RCVTIMEO). 0 disables. On stacks without the option the
+         * call is a silent no-op — behaviour is then unchanged.
+         */
+        fun setReceiveTimeout(seconds: Int) {
+            this.setReceiveTimeoutNative(seconds)
+        }
+
+        private native fun setReceiveTimeoutNative(seconds: Int)
+
         fun bind(port: Int) {
             this.bindNative(port, this.addressFamily)
         }
