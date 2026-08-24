@@ -13,7 +13,18 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
-#include <ifaddrs.h>
+// AROS (and other hosts without BSD interface enumeration) ship no
+// <ifaddrs.h>. Guard the include AND the one function that uses it, which
+// then reports "no addresses" instead of failing the whole build.
+#if defined(__has_include)
+#  if __has_include(<ifaddrs.h>)
+#    include <ifaddrs.h>
+#    define AM_NET_HAVE_IFADDRS 1
+#  endif
+#else
+#  include <ifaddrs.h>
+#  define AM_NET_HAVE_IFADDRS 1
+#endif
 #include <net/if.h>
 
 // --------- Open-fd registry ------------------------------------------------
@@ -530,6 +541,7 @@ function_result Am_Net_Socket_getLocalIpAddresses_0(void)
 	char list[512];
 	list[0] = '\0';
 
+#ifdef AM_NET_HAVE_IFADDRS
 	struct ifaddrs *ifaddr = NULL;
 	if (getifaddrs(&ifaddr) == 0) {
 		for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
@@ -550,6 +562,7 @@ function_result Am_Net_Socket_getLocalIpAddresses_0(void)
 		}
 		freeifaddrs(ifaddr);
 	}
+#endif // AM_NET_HAVE_IFADDRS
 
 	__result.return_value.value.object_value = __create_string(list, &Am_Lang_String);
 	return __result;
