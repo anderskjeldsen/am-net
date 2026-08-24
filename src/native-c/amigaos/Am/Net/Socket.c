@@ -605,9 +605,7 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
                                           // AmiSSL's test/https.c.
 
     s = this->object_properties.class_object_properties.object_data.value.int_value;
-    printf("Socket.connect: calling connect() s=%d\n", s); fflush(stdout);
     result = connect(s, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
-    printf("Socket.connect: connect() returned %d\n", result); fflush(stdout);
     if (result != 0) {
         __throw_simple_exception("Unable to connect to host", "in Am_Net_Socket_connectNative_0", &__result);
         goto __exit;
@@ -809,7 +807,6 @@ function_result Am_Net_Socket_listenNative_0(aobject * const this, int backlog)
         goto __exit;
     }
 
-    printf("Setting socket %d to listen with backlog %d\n", s, backlog);
     result = listen(s, backlog);
     if (result < 0) {
         __throw_simple_exception("Unable to listen on socket", "in Am_Net_Socket_listenNative_0", &__result);
@@ -845,14 +842,12 @@ function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * cli
         goto __exit;
     }
 
-    printf("Waiting for connection on socket %d\n", s);
     client_socket = accept(s, (struct sockaddr *)&client_addr, &client_len);
     if (client_socket < 0) {
         __throw_simple_exception("Unable to accept connection", "in Am_Net_Socket_acceptNative_0", &__result);
         goto __exit;
     }
 
-    printf("Accepted connection, client socket: %d\n", client_socket);
     clientSocket->object_properties.class_object_properties.object_data.value.int_value = client_socket;
     // Same registry contract as `createSocket` — the accept()'d fd
     // must be tracked so closeAllOpenFds reaches it at shutdown.

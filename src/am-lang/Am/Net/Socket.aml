@@ -170,6 +170,7 @@ namespace Am.Net
         // `private` so application code can't trigger it directly —
         // the only legitimate caller is the native `createSocket()`
         // bring-up path on amigaos / morphos-ppc.
+        #nativeEntry
         private static fun nativeInit() {
             var t = Thread.getCurrent()
             if (t != null) {

@@ -363,9 +363,7 @@ function_result Am_Net_Socket_createSocket_0(aobject * const this, int addressFa
         goto __exit;
     }
 
-    printf("create socket %d, %d, %d\n", addressFamily, socketType, protocolFamily);
     s = socket(addressFamily, socketType, protocolFamily);
-    printf("newsocket %d\n", s);
     if (s < 0) {
         __throw_simple_exception("Unable to create socket", "in Am_Net_Socket_createSocket_0", &__result);
         goto __exit;
@@ -402,14 +400,12 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
 
     host_name_holder = hostName->object_properties.class_object_properties.object_data.value.custom_value;
 
-    printf("host name: %s\n", host_name_holder->string_value);
     he = gethostbyname((STRPTR)host_name_holder->string_value);
     if (!he) {
         __throw_simple_exception("Unable to resolve host", "in Am_Net_Socket_connectNative_0", &__result);
         goto __exit;
     }
 
-    printf("host: %d\n", *(int *)he->h_addr_list[0]);
     memset(&peer_addr, 0, sizeof(peer_addr));
     peer_addr.sin_addr   = *(struct in_addr *)he->h_addr_list[0];
     peer_addr.sin_family = addressFamily;
@@ -419,7 +415,6 @@ function_result Am_Net_Socket_connectNative_0(aobject * const this, aobject * ho
                                           // AmiSSL's test/https.c.
 
     s = this->object_properties.class_object_properties.object_data.value.int_value;
-    printf("socket %d\n", s);
     result = connect(s, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
     if (result != 0) {
         __throw_simple_exception("Unable to connect to host", "in Am_Net_Socket_connectNative_0", &__result);
@@ -622,7 +617,6 @@ function_result Am_Net_Socket_listenNative_0(aobject * const this, int backlog)
         goto __exit;
     }
 
-    printf("Setting socket %d to listen with backlog %d\n", s, backlog);
     result = listen(s, backlog);
     if (result < 0) {
         __throw_simple_exception("Unable to listen on socket", "in Am_Net_Socket_listenNative_0", &__result);
@@ -658,14 +652,12 @@ function_result Am_Net_Socket_acceptNative_0(aobject * const this, aobject * cli
         goto __exit;
     }
 
-    printf("Waiting for connection on socket %d\n", s);
     client_socket = accept(s, (struct sockaddr *)&client_addr, &client_len);
     if (client_socket < 0) {
         __throw_simple_exception("Unable to accept connection", "in Am_Net_Socket_acceptNative_0", &__result);
         goto __exit;
     }
 
-    printf("Accepted connection, client socket: %d\n", client_socket);
     clientSocket->object_properties.class_object_properties.object_data.value.int_value = client_socket;
     am_net_register_fd(client_socket);
 
