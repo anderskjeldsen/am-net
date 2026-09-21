@@ -4,18 +4,23 @@ CMD=java -jar $(AMLC)
 LOGLEVEL:=1
 MAXONEERROR:=false
 RUNTIMELOGGING:=false
+# Resolve transitive deps (am-lang-core, am-async, am-threading, …) from
+# the workspace root instead of am-net's vendored `dependencies/` copies,
+# which go stale relative to the workspace amlc.jar (e.g. the emitted
+# `__retain_slot_read` runtime helper predates the bundled am-lang-core).
+LPP:=../
 
 build:
-	$(CMD) build . -bt linux-x64 -ll5 -maxOneError
+	$(CMD) build . -bt linux-x64 -lpp $(LPP) -ll5 -maxOneError
 
 build-amigaos:
-	$(CMD) build . -bt amigaos-docker -ll5
+	$(CMD) build . -bt amigaos-docker -lpp $(LPP) -ll5
 
 build-macos-arm:
-	$(CMD) build . -bt macos-arm -ll5 -maxOneError
+	$(CMD) build . -bt macos-arm -lpp $(LPP) -ll5 -maxOneError
 
 build-force-deps:
-	$(CMD) build . -fld -bt linux-x64 ll 4
+	$(CMD) build . -fld -bt linux-x64 -lpp $(LPP) ll 4
 
 test:
 # if MAXONEERROR is true, add -maxOneError flag
